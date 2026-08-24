@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FIRST DROP - オンライン版</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+
+  <section id="lobbyScreen" class="screen">
+    <div class="lobby-box">
+      <h1>🎢 FIRST DROP</h1>
+      <p class="sub">ジェットコースター設計ボードゲーム（2〜4人）</p>
+
+      <label>あなたの名前</label>
+      <input id="nameInput" maxlength="20" placeholder="名前を入力">
+
+      <div class="lobby-actions">
+        <button id="createBtn" class="primary">新しいルームを作成</button>
+      </div>
+
+      <div class="divider">または</div>
+
+      <label>ルームコード</label>
+      <input id="roomCodeInput" maxlength="5" placeholder="例：AB12C" style="text-transform:uppercase">
+      <button id="joinBtn">ルームに参加</button>
+
+      <p id="lobbyError" class="error"></p>
+    </div>
+  </section>
+
+  <section id="gameScreen" class="screen hidden">
+    <header id="topbar">
+      <div id="roomInfo">
+        <button id="backToTitleBtn" title="タイトル画面に戻る">🏠 タイトルに戻る</button>
+        <span>ルームコード：<b id="roomCodeLabel"></b></span>
+        <button id="copyLinkBtn">招待リンクをコピー</button>
+        <span id="copiedMsg" class="hint hidden">コピーしました！</span>
+      </div>
+      <div id="phaseInfo"></div>
+    </header>
+
+    <section id="scoreBar" class="hidden"></section>
+
+    <details id="gameRules">
+      <summary>📜 ゲームルール説明（クリックで開閉）</summary>
+      <div class="rules-body">
+        <p><b>目的：</b>2〜4人で同時にコースターを設計します。ラウンドを重ねてレールを完成させ、試運転の結果でもっとも高い合計満足度を出したプレイヤーが勝利です。</p>
+        <p><b>ルール設定（ロビーでホストが変更可能）：</b>レール設置枚数（8 or 16マス、枚数に応じてラウンド数も自動で変わります）、終了時高度0ボーナスの有無、記録更新機能の有無を選べます。</p>
+        <p><b>ラウンドの流れ（レール設置枚数に応じて全4 or 8ラウンド）：</b></p>
+        <ol>
+          <li>そのラウンドの客層カードが1人公開されます（最終ラウンド終了時に4人揃います）。</li>
+          <li>全員に一般パーツ（巻上・落下も含む）が3枚ずつドラフトで配られ、1枚ずつ選んで隣に回します。</li>
+          <li>手元のカードから2枚を選び、自分のレール（空いているマスならどこでも）に配置します。ブレーキを置くときは、その場で下げる速度の値を入力します。</li>
+          <li>配置しなかったカードはそのラウンドで捨札になります（持ち越し不可）。</li>
+        </ol>
+        <p><b>試運転フェイズ：</b>全員のレールが完成したら、1人ずつ順番にスタート（高度2・速度2）からレールを走らせ、マスごとに高度・速度・スリル値を計算します。ツイスト／サイクロン／ループは進入速度がぴったり条件に合わないと安全装置が作動し、その回以降の満足度はその直前の値で固定されます（客層ボーナスや記録更新も、安全装置作動より前のマスだけが対象です）。</p>
+        <p><b>満足度計算：</b>各マスのスリル値と客層のスリル耐性を比較し、ぴったり一致で+（スリル値＋5）、下回れば+スリル値、上回れば-2の満足度が入ります。さらに客層ごとのボーナス条件を満たすと追加の満足度が入ります（詳細は下の「獲得満足度表」を参照）。</p>
+        <p><b>記録更新：</b>毎ゲーム、4種類の記録項目（最高速度記録・最高高度記録・満足度記録・落下高低差記録）からランダムに2つが選ばれます。全プレイヤーの中でその記録を最も更新したプレイヤーにボーナス満足度が入ります（同率1位が複数いる場合は全員に付与されます。設定でOFFにできます）。</p>
+        <p><b>終了時高度0ボーナス：</b>設定でONの場合、試運転終了時（安全装置作動時はその直前）の高度がちょうど0だとボーナス満足度が入ります。</p>
+        <p><b>勝敗：</b>各プレイヤーの客の満足度合計＋各種ボーナス満足度の合計が最も高いプレイヤーが勝利。同点の場合は、安全装置が一度も作動しなかったプレイヤーが優先されます。</p>
+        <p class="hint">ゲームが終わったら、ホストが「▶ 次のゲームへ」を押すと同じメンバーのまま新しいゲームがすぐに始まります。</p>
+      </div>
+    </details>
+
+    <details id="partsLegend">
+      <summary>📖 パーツ一覧・効果の説明（クリックで開閉）</summary>
+      <p class="hint">巻上・落下・ブレーキ以外のすべてのマスで、通過すると<b>速度-1</b>します（下記の「速度」欄が実際の増減）。すべてのパーツは巻上・落下も含めて同じ山札からドラフトされます。</p>
+      <div class="legend-grid">
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-curve.png" alt=""><b class="legend-name curve">カーブ</b><span class="legend-thrill">スリル1</span><span class="legend-count">枚数：10枚</span><p>条件なし。通過すると<b>速度-1</b>。誰でも安心して置ける基本パーツ。</p></div>
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-twist.png" alt=""><b class="legend-name twist">ツイスト</b><span class="legend-thrill">スリル2</span><span class="legend-count">枚数：7枚</span><p>進入時の速度が<b>ちょうど2のときだけ</b>使用可能。成功すると<b>速度-1</b>。条件を満たさないと安全装置作動（スリル0・以降の満足度はこの直前の値で固定）。</p></div>
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-airtime.png" alt=""><b class="legend-name airtime">サイクロン</b><span class="legend-thrill">スリル3</span><span class="legend-count">枚数：5枚</span><p>進入時の速度が<b>ちょうど3のときだけ</b>使用可能。成功すると<b>速度-1</b>。条件を満たさないと安全装置作動。</p></div>
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-loop.png" alt=""><b class="legend-name loop">ループ</b><span class="legend-thrill">スリル4</span><span class="legend-count">枚数：3枚（希少）</span><p>進入時の速度が<b>ちょうど4のときだけ</b>使用可能。成功すると<b>速度-1</b>。条件を満たさないと安全装置作動。</p></div>
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-tunnel.png" alt=""><b class="legend-name tunnel">トンネル</b><span class="legend-thrill">スリル＝進入時の速度</span><span class="legend-count">枚数：4枚</span><p>通過すると<b>速度-1</b>。進入した瞬間（このマスに来た時点）の速度がそのままスリル値になる。速いほど高スリル、遅いほど低スリル。安全装置の対象外。</p></div>
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-brake.png" alt=""><b class="legend-name brake">ブレーキ</b><span class="legend-thrill">スリル＝下げた量</span><span class="legend-count">枚数：4枚</span><p><b>配置するときに「下げる量」を自分で決める。</b>このマスに来た時点の速度からその分だけ下げる（速度が足りなければ下げられる分だけ）。下げた分がそのままスリル値になる。</p></div>
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-lifthill.png" alt=""><b class="legend-name climb">巻上</b><span class="legend-thrill">スリル0</span><span class="legend-count">Lv2〜4：各6枚</span><p>高度をカードのLvだけ増やし、速度を0にする。</p></div>
+        <div class="legend-item"><img class="legend-icon" src="pictures/part-drop.png" alt=""><b class="legend-name drop">落下</b><span class="legend-thrill">スリル＝落下Lv</span><span class="legend-count">Lv2〜4：各6枚</span><p>高度がカードのLv（2〜4）以上あれば、その分だけ消費して同じ量だけ<b>速度が上がる</b>（スリル＝Lv値）。<b>高度が足りない場合は安全装置作動</b>（以降の満足度はこの直前の値で固定）。</p></div>
+      </div>
+    </details>
+
+    <details id="scoreTable">
+      <summary>🧮 獲得満足度表（クリックで開閉）</summary>
+      <table class="score-rule-table">
+        <thead><tr><th>判定条件</th><th>獲得満足度</th></tr></thead>
+        <tbody>
+          <tr><td>スリル値 ＝ スリル耐性</td><td class="plus">スリル値+5</td></tr>
+          <tr><td>スリル値 ＜ スリル耐性</td><td class="plus">スリル値</td></tr>
+          <tr><td>スリル値 ＞ スリル耐性</td><td class="minus">-2</td></tr>
+          <tr><td>安全装置が作動した瞬間</td><td class="minus">+0、安全装置作動以降のレールは満足度計算されない</td></tr>
+        </tbody>
+      </table>
+      <table class="score-rule-table">
+        <thead><tr><th>客層</th><th>スリル耐性</th><th>ボーナス条件</th><th>ボーナス満足度</th></tr></thead>
+        <tbody id="customerSkillTable"></tbody>
+      </table>
+    </details>
+
+    <section id="lobbyWait" class="hidden">
+      <h2>参加者待ち（2〜4人）</h2>
+      <ul id="playerListLobby"></ul>
+
+      <div id="settingsBox" class="settings-box">
+        <h3>⚙ ルール設定</h3>
+        <div class="settings-row">
+          <label>レール設置枚数</label>
+          <div class="settings-options" id="settingRailSize">
+            <button type="button" class="settings-opt" data-value="8">8マス</button>
+            <button type="button" class="settings-opt" data-value="16">16マス</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>終了時高度0ボーナス</label>
+          <div class="settings-options" id="settingAltitudeBonus">
+            <button type="button" class="settings-opt" data-value="false">無</button>
+            <button type="button" class="settings-opt" data-value="true">有</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>記録更新機能</label>
+          <div class="settings-options" id="settingRecords">
+            <button type="button" class="settings-opt" data-value="false">無</button>
+            <button type="button" class="settings-opt" data-value="true">有</button>
+          </div>
+        </div>
+        <p class="hint" id="settingsHostHint">設定はホストのみ変更できます。</p>
+      </div>
+
+      <button id="startGameBtn" class="primary hidden">ゲーム開始</button>
+      <p class="hint">招待リンクを共有して、あと1〜3人を集めてください。</p>
+    </section>
+
+    <section id="recordsBar" class="hidden"></section>
+
+    <section id="customerBar"></section>
+
+    <section id="playersBoard"></section>
+
+    <section id="myControls"></section>
+
+    <section id="trialSection" class="hidden">
+      <h2>試運転フェイズ</h2>
+      <div id="trialLog"></div>
+    </section>
+
+    <section id="resultSection" class="hidden">
+      <h2>🏆 結果</h2>
+      <div id="resultCalc"></div>
+      <div id="resultBoard"></div>
+      <button id="playAgainBtn" class="primary hidden">▶ 次のゲームへ</button>
+      <p id="playAgainHint" class="hint hidden">ホストが次のゲームを開始するのを待っています…</p>
+    </section>
+
+    <section id="logSection">
+      <h3>ログ</h3>
+      <div id="logBox"></div>
+    </section>
+  </section>
+
+</div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
