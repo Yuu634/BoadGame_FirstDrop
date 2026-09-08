@@ -25,6 +25,8 @@ class GameRoom {
     this.activeRecords = [];
     this.recordResults = [];
     this.sabotageDeck = [];
+    this.sabotageTurnIndex = 0; // 妨害フェイズは全員同時ではなく、プレイヤーごとに順番に行う
+    this.recoveryTurnIndex = 0; // 復旧フェイズも同様に順番に行う（タスクがあるプレイヤーだけ）
   }
 
   addLog(msg) {
@@ -318,15 +320,16 @@ class GameRoom {
     this.startSabotagePhase();
   }
 
-  // ---------- 妨害フェイズ ----------
+  // ---------- 妨害フェイズ（全員同時ではなく、プレイヤーごとに順番に行う） ----------
   startSabotagePhase() {
     this.phase = 'sabotage';
+    this.sabotageTurnIndex = 0;
     for (const p of this.players) {
       p.sabotageSubmitted = false;
       p.pendingSabotageChoices = [];
       p.sabotageHand = this.drawSabotageCards(2);
     }
-    this.addLog(`ラウンド${this.round}：配置完了。妨害フェイズです（妨害カードが2枚ずつ配られました）`);
+    this.addLog(`ラウンド${this.round}：配置完了。妨害フェイズです（妨害カードが2枚ずつ配られました）。${this.players[0].name} の妨害ターンです`);
   }
 
   drawSabotageCards(n) {
@@ -354,6 +357,8 @@ class GameRoom {
     if (this.phase !== 'sabotage') throw new Error('妨害フェイズではありません');
     const p = this.getPlayer(playerId);
     if (!p) throw new Error('プレイヤーが見つかりません');
+    const current = this.players[this.sabotageTurnIndex];
+    if (!current || current.id !== playerId) throw new Error('あなたの妨害ターンではありません');
     if (p.sabotageSubmitted) throw new Error('すでに提出済みです');
     if (!Array.isArray(plays)) throw new Error('不正な入力です');
     if (plays.length > 2) throw new Error('妨害カードは最大2枚までです');
@@ -478,19 +483,43 @@ class GameRoom {
 
   checkAdvanceSabotage() {
     if (this.phase !== 'sabotage') return;
-    const allSubmitted = this.players.every((p) => p.sabotageSubmitted);
+    // 現在の手番プレイヤーが誰かを狙った妨害の「対象側の選択」が残っている間は、手番を進めない
     const anyPending = this.players.some((p) => p.pendingSabotageChoices.length > 0);
-    if (!allSubmitted || anyPending) return;
-    const anyRecovery = this.players.some((p) => p.recoveryTasks.length > 0);
-    if (anyRecovery) {
-      this.phase = 'recovery';
-      this.addLog('妨害フェイズ終了。復旧フェイズに入ります');
+    if (anyPending) return;
+    const current = this.players[this.sabotageTurnIndex];
+    if (!current || !current.sabotageSubmitted) return; // 現在の手番プレイヤーがまだ提出していない
+    this.sabotageTurnIndex += 1;
+    if (this.sabotageTurnIndex >= this.players.length) {
+      const anyRecovery = this.players.some((p) => p.recoveryTasks.length > 0);
+      if (anyRecovery) {
+        this.startRecoveryPhase();
+      } else {
+        this.afterSabotageAndRecoveryComplete();
+      }
     } else {
-      this.afterSabotageAndRecoveryComplete();
+      this.addLog(`${this.players[this.sabotageTurnIndex].name} の妨害ターンです`);
     }
   }
 
-  // ---------- 復旧フェイズ ----------
+  // ---------- 復旧フェイズ（タスクがあるプレイヤーだけ、順番に行う） ----------
+  startRecoveryPhase() {
+    this.phase = 'recovery';
+    this.recoveryTurnIndex = 0;
+    this.addLog('妨害フェイズ終了。復旧フェイズに入ります');
+    this.advanceToNextRecoveryPlayer();
+  }
+
+  advanceToNextRecoveryPlayer() {
+    while (this.recoveryTurnIndex < this.players.length && this.players[this.recoveryTurnIndex].recoveryTasks.length === 0) {
+      this.recoveryTurnIndex += 1;
+    }
+    if (this.recoveryTurnIndex >= this.players.length) {
+      this.afterSabotageAndRecoveryComplete();
+    } else {
+      this.addLog(`${this.players[this.recoveryTurnIndex].name} の復旧ターンです`);
+    }
+  }
+
   queueRecoveryTask(player, type, slot) {
     let drawn = this.drawGeneralCards(3);
     if (type === 'destroyed') {
@@ -550,6 +579,8 @@ class GameRoom {
     if (this.phase !== 'recovery') throw new Error('復旧フェイズではありません');
     const p = this.getPlayer(playerId);
     if (!p) throw new Error('プレイヤーが見つかりません');
+    const current = this.players[this.recoveryTurnIndex];
+    if (!current || current.id !== playerId) throw new Error('あなたの復旧ターンではありません');
     payload = payload || {};
     const idx = p.recoveryTasks.findIndex((t) => t.id === payload.taskId && !t.resolved);
     if (idx === -1) throw new Error('対象の復旧タスクが見つかりません');
@@ -581,14 +612,10 @@ class GameRoom {
 
     task.resolved = true;
     p.recoveryTasks.splice(idx, 1);
-    this.checkAdvanceRecovery();
-  }
-
-  checkAdvanceRecovery() {
-    if (this.phase !== 'recovery') return;
-    const anyPending = this.players.some((p) => p.recoveryTasks.length > 0);
-    if (anyPending) return;
-    this.afterSabotageAndRecoveryComplete();
+    if (p.recoveryTasks.length === 0) {
+      this.recoveryTurnIndex += 1;
+      this.advanceToNextRecoveryPlayer();
+    }
   }
 
   afterSabotageAndRecoveryComplete() {
@@ -898,6 +925,8 @@ class GameRoom {
       settings: this.settings,
       activeRecords: this.activeRecords,
       recordResults: this.recordResults,
+      sabotageTurnPlayerId: this.phase === 'sabotage' && this.players[this.sabotageTurnIndex] ? this.players[this.sabotageTurnIndex].id : null,
+      recoveryTurnPlayerId: this.phase === 'recovery' && this.players[this.recoveryTurnIndex] ? this.players[this.recoveryTurnIndex].id : null,
       players: this.players.map((p) => this.publicPlayerView(p)),
       revealedCustomers: this.revealedCustomers,
       customerDeckCount: this.customerDeck.length,

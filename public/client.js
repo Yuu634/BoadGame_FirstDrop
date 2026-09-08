@@ -541,13 +541,31 @@ function appendCardLabelLines(div, c, opts) {
   });
 }
 
+// 自分を「下」、他プレイヤーを「上・左・右」に割り当てて、テーブルを囲むような配置にする
+function assignBoardPositions(s) {
+  const meIndex = s.players.findIndex((p) => p.id === s.myId);
+  const posForId = {};
+  if (meIndex === -1) {
+    s.players.forEach((p, i) => { posForId[p.id] = i === 0 ? 'bottom' : ['top', 'left', 'right'][(i - 1) % 3]; });
+    return posForId;
+  }
+  posForId[s.players[meIndex].id] = 'bottom';
+  const posOrder = ['top', 'left', 'right'];
+  for (let i = 1; i < s.players.length; i++) {
+    const p = s.players[(meIndex + i) % s.players.length];
+    posForId[p.id] = posOrder[(i - 1) % posOrder.length];
+  }
+  return posForId;
+}
+
 function renderPlayersBoard(s) {
   const board = el('playersBoard');
   board.innerHTML = '';
+  const positions = assignBoardPositions(s);
   s.players.forEach((p) => {
     const isMe = p.id === s.myId;
     const panel = document.createElement('div');
-    panel.className = 'player-panel' + (isMe ? ' me' : '');
+    panel.className = 'player-panel' + (isMe ? ' me' : '') + ' pos-' + (positions[p.id] || 'top');
 
     const head = document.createElement('div');
     head.className = 'player-head';
@@ -555,8 +573,8 @@ function renderPlayersBoard(s) {
       ${p.connected ? '' : '<span class="tag">切断中</span>'}
       ${s.phase === 'placement' ? `<span class="tag">${p.placedThisRound ? '配置済み' : '配置待ち'}</span>` : ''}
       ${s.phase === 'draft' ? `<span class="tag">${p.hasPendingPick ? '選択済み' : '選択待ち'}</span>` : ''}
-      ${s.phase === 'sabotage' ? `<span class="tag">${p.pendingSabotageChoices && p.pendingSabotageChoices.length ? '対応待ち' : (p.sabotageSubmitted ? '提出済み' : '選択中')}</span>` : ''}
-      ${s.phase === 'recovery' ? `<span class="tag">${p.recoveryTasks && p.recoveryTasks.length ? '復旧待ち' : '完了'}</span>` : ''}`;
+      ${s.phase === 'sabotage' ? `<span class="tag">${p.pendingSabotageChoices && p.pendingSabotageChoices.length ? '対応待ち' : (p.sabotageSubmitted ? '提出済み' : (p.id === s.sabotageTurnPlayerId ? '🎯手番' : '待機中'))}</span>` : ''}
+      ${s.phase === 'recovery' ? `<span class="tag">${p.recoveryTasks && p.recoveryTasks.length ? (p.id === s.recoveryTurnPlayerId ? '🎯復旧中' : '復旧待ち') : '完了'}</span>` : ''}`;
     panel.appendChild(head);
 
     if (p.customers && p.customers.length) {
@@ -901,9 +919,19 @@ function renderSabotagePhase(s, me, box) {
     box.appendChild(wrap);
   });
 
-  // 2. 自分の妨害カードの使用
+  // 2. 自分の妨害カードの使用（プレイヤーごとに順番に行う）
+  const turnPlayer = s.players.find((p) => p.id === s.sabotageTurnPlayerId);
+  const turnTag = document.createElement('div');
+  turnTag.className = 'hint sabotage-turn-tag';
+  turnTag.textContent = turnPlayer ? `🎯 現在の妨害ターン：${turnPlayer.name}${turnPlayer.id === s.myId ? '（あなた）' : ''}` : '';
+  box.appendChild(turnTag);
+
   if (me.sabotageSubmitted) {
     box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '妨害カードは提出済みです。他のプレイヤーを待っています…' }));
+    return;
+  }
+  if (s.sabotageTurnPlayerId !== s.myId) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: `${turnPlayer ? turnPlayer.name : '他のプレイヤー'} の妨害ターンです。順番をお待ちください…` }));
     return;
   }
 
@@ -1019,8 +1047,18 @@ function renderRecoveryPhase(s, me, box) {
   const taskIds = new Set((me.recoveryTasks || []).map((t) => t.id));
   Object.keys(recoveryChoiceState).forEach((id) => { if (!taskIds.has(id)) delete recoveryChoiceState[id]; });
 
+  const turnPlayer = s.players.find((p) => p.id === s.recoveryTurnPlayerId);
+  const turnTag = document.createElement('div');
+  turnTag.className = 'hint sabotage-turn-tag';
+  turnTag.textContent = turnPlayer ? `🎯 現在の復旧ターン：${turnPlayer.name}${turnPlayer.id === s.myId ? '（あなた）' : ''}` : '';
+  box.appendChild(turnTag);
+
   if (!me.recoveryTasks || me.recoveryTasks.length === 0) {
     box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '復旧の必要はありません。他のプレイヤーの復旧を待っています…' }));
+    return;
+  }
+  if (s.recoveryTurnPlayerId !== s.myId) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: `${turnPlayer ? turnPlayer.name : '他のプレイヤー'} の復旧ターンです。順番をお待ちください…` }));
     return;
   }
 
