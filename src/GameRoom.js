@@ -635,6 +635,10 @@ class GameRoom {
       p.rail[targetSlot] = card;
       this.addLog(`${p.name} が復旧フェイズでマス${targetSlot + 1}に${card.label}を設置しました`);
     } else {
+      // パーツ破壊（落下・巻き上げのレベル低下による破壊を含む）の復旧では、必ずいずれかのパーツを設置する
+      if (task.type === 'destroyed' && task.drawnCards.length > 0) {
+        throw new Error('パーツ破壊の復旧では、必ずいずれかのパーツを設置してください');
+      }
       this.addLog(`${p.name} は復旧を見送りました`);
     }
 

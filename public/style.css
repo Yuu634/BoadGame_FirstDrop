@@ -193,6 +193,7 @@ section h2, section h3 { margin: 0 0 8px; }
 }
 
 #customerBar { display: flex; gap: 10px; flex-wrap: wrap; }
+.customer-bar-title { flex-basis: 100%; margin: 0; font-size: 14px; color: var(--accent2); }
 .customer-card {
   background: var(--panel); border: 1px solid #2c3c4d; border-radius: 10px; padding: 10px 14px; min-width: 160px;
 }

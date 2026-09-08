@@ -396,10 +396,20 @@ function renderRecordsBar(s) {
   });
 }
 
+// 客層は妨害（交換・出禁）によりプレイヤーごとに内容が変わっていくため、ここには
+// 「全員共通の公開履歴」ではなく「自分が現在持っている客層」を表示する
 function renderCustomers(s) {
   const bar = el('customerBar');
   bar.innerHTML = '';
-  s.revealedCustomers.forEach((c, i) => {
+  const me = s.players.find((p) => p.id === s.myId);
+  const myCustomers = (me && me.customers) || [];
+
+  const title = document.createElement('h3');
+  title.className = 'customer-bar-title';
+  title.textContent = '🙋 あなたの客層';
+  bar.appendChild(title);
+
+  myCustomers.forEach((c, i) => {
     const div = document.createElement('div');
     div.className = 'customer-card';
     div.innerHTML = `<span class="customer-icon">${customerIcon(c.typeKey)}</span>
@@ -411,6 +421,12 @@ function renderCustomers(s) {
     const div = document.createElement('div');
     div.className = 'customer-card';
     div.innerHTML = `<span class="hint">残り${4 - s.revealedCustomers.length}人は未公開</span>`;
+    bar.appendChild(div);
+  }
+  if (me && me.bannedCustomerTypes && me.bannedCustomerTypes.length && myCustomers.length < s.revealedCustomers.length) {
+    const div = document.createElement('div');
+    div.className = 'customer-card';
+    div.innerHTML = `<span class="hint">🚫 出禁：${me.bannedCustomerTypes.map((tk) => (CUSTOMER_TABLE_DATA.find((r) => r.typeKey === tk) || {}).name || tk).join('・')}（該当タイプは今後も公開されません）</span>`;
     bar.appendChild(div);
   }
 }
@@ -870,6 +886,7 @@ function makeLabeledSelect(labelText, options, state, key, numeric) {
 // 2枚配られた妨害カードのうち、使えるのは1枚だけ。選ぶ → 効果の対象（客層・パーツ）を選ぶ、の2段階にする。
 let sabotageSelectedCardId = null;
 let sabotagePlayParams = {}; // 選択中の1枚に対する対象プレイヤー・客層・パーツなどのパラメータ
+let pendingChoiceState = {}; // choice.id -> { idx } : 他プレイヤーからの妨害への対応（客層/パーツ選択）を保持
 
 // カードごとに「実際に選択可能な対象プレイヤー」だけを返す（対象がいないカードは選べないようにする）
 function getValidSabotageTargets(card, me, otherPlayers) {
@@ -905,7 +922,15 @@ function renderSabotagePhase(s, me, box) {
   }
 
   // 1. 自分が対応すべき妨害（他プレイヤーから受けたカードで、自分の選択が必要なもの）
+  // 選択中の値はchoice.idごとに永続化する（renderのたびにstateを作り直すと、選び直しても
+  // 常に最初の選択肢に戻ってしまい、実質「最初のパーツしか選べない」不具合になっていた）
+  const choiceIds = new Set((me.pendingSabotageChoices || []).map((c) => c.id));
+  Object.keys(pendingChoiceState).forEach((id) => { if (!choiceIds.has(id)) delete pendingChoiceState[id]; });
+
   (me.pendingSabotageChoices || []).forEach((choice) => {
+    if (!pendingChoiceState[choice.id]) pendingChoiceState[choice.id] = {};
+    const state = pendingChoiceState[choice.id];
+
     const wrap = document.createElement('div');
     wrap.className = 'sabotage-choice-box';
     const desc = document.createElement('div');
@@ -914,7 +939,6 @@ function renderSabotagePhase(s, me, box) {
     wrap.appendChild(desc);
 
     if (choice.type === 'custRandomSwap') {
-      const state = {};
       wrap.appendChild(makeLabeledSelect(
         '入れ替える自分の客層：',
         me.customers.map((c, i) => ({ value: i, label: `${c.name}（スリル耐性${c.durability}）` })),
@@ -933,7 +957,6 @@ function renderSabotagePhase(s, me, box) {
       if (filledSlots.length === 0) {
         wrap.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（設置済みのパーツがありません）' }));
       } else {
-        const state = {};
         wrap.appendChild(makeLabeledSelect('破壊させる自分のパーツ：', filledSlots, state, 'idx', true));
         const btn = document.createElement('button');
         btn.textContent = 'このパーツを破壊させる';
@@ -1105,8 +1128,11 @@ function renderRecoveryPhase(s, me, box) {
     wrap.className = 'recovery-task-box';
     const label = document.createElement('div');
     label.className = 'hint';
+    const mandatory = task.type === 'destroyed' && task.drawnCards.length > 0;
     if (task.type === 'destroyed') {
-      label.textContent = `マス${task.slot + 1}が破壊されました。一般パーツを${task.drawnCards.length}枚引きました。1枚選んでそのマスに設置できます（設置しなくても構いません）：`;
+      label.textContent = mandatory
+        ? `マス${task.slot + 1}が破壊されました。一般パーツを${task.drawnCards.length}枚引きました。この中から1枚を選んでそのマスに設置してください（必須）：`
+        : `マス${task.slot + 1}が破壊されましたが、山札切れのため復旧できませんでした。`;
     } else {
       label.textContent = `マス${task.slot + 1}のパーツが交換されました。一般パーツを${task.drawnCards.length}枚引きました。そのマス、またはその前後1マスに設置できます（すでにパーツがあっても上書きされます）：`;
     }
@@ -1196,15 +1222,18 @@ function renderRecoveryPhase(s, me, box) {
       wrap.appendChild(confirmBtn);
     }
 
-    const skipBtn = document.createElement('button');
-    skipBtn.textContent = '設置しない（見送る）';
-    skipBtn.addEventListener('click', () => {
-      socket.emit('resolveRecovery', { taskId: task.id }, (res) => {
-        if (!res.ok) return alert(res.error);
-        delete recoveryChoiceState[task.id];
+    // パーツ破壊（レベル低下による破壊を含む）の復旧は必須のため、山札が残っている限り見送りは選べない
+    if (!mandatory) {
+      const skipBtn = document.createElement('button');
+      skipBtn.textContent = '設置しない（見送る）';
+      skipBtn.addEventListener('click', () => {
+        socket.emit('resolveRecovery', { taskId: task.id }, (res) => {
+          if (!res.ok) return alert(res.error);
+          delete recoveryChoiceState[task.id];
+        });
       });
-    });
-    wrap.appendChild(skipBtn);
+      wrap.appendChild(skipBtn);
+    }
 
     box.appendChild(wrap);
   });
