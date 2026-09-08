@@ -3,11 +3,11 @@
 const socket = io();
 
 const CUSTOMER_SKILLS = {
-  elder: '全レールにおいてスリル値1以下 → +15',
+  elder: '全レールにおいてスリル値2以下 → +15',
   family: '異なるパーツ種類を5種類以上通過 → +10',
   schoolTrip: 'スリル値が3マス連続で上昇 → +10',
   streamer: '最終マスが最大スリル値 → +12',
-  couple: 'トンネル通過ごとに +4',
+  couple: 'トンネル通過ごとに → +4×(トンネル枚数)',
   thrillSeeker: 'スリル4以上のマスを3回通過 → +12',
 };
 
@@ -865,7 +865,31 @@ function makeLabeledSelect(labelText, options, state, key, numeric) {
 }
 
 // ---------- 妨害フェイズ ----------
-let sabotagePlayState = {}; // cardId -> { use, targetPlayerId, myIndex, targetIndex, typeKey, mySlot, targetSlot }
+// 2枚配られた妨害カードのうち、使えるのは1枚だけ。選ぶ → 効果の対象（客層・パーツ）を選ぶ、の2段階にする。
+let sabotageSelectedCardId = null;
+let sabotagePlayParams = {}; // 選択中の1枚に対する対象プレイヤー・客層・パーツなどのパラメータ
+
+// カードごとに「実際に選択可能な対象プレイヤー」だけを返す（対象がいないカードは選べないようにする）
+function getValidSabotageTargets(card, me, otherPlayers) {
+  switch (card.type) {
+    case 'custRandomSwap':
+      return otherPlayers.filter((p) => p.customers && p.customers.length > 0);
+    case 'custMutualSwap':
+      if (!me.customers || me.customers.length === 0) return [];
+      return otherPlayers.filter((p) => p.customers && p.customers.length > 0);
+    case 'custBanType':
+      return otherPlayers;
+    case 'partDestroy':
+      return otherPlayers.filter((p) => p.rail.some((c) => c));
+    case 'partSwap':
+      if (!me.rail.some((c) => c)) return [];
+      return otherPlayers.filter((p) => p.rail.some((c) => c));
+    case 'partLevelDown':
+      return otherPlayers.filter((p) => p.rail.some((c) => c && (c.kind === 'climb' || c.kind === 'drop')));
+    default:
+      return otherPlayers;
+  }
+}
 
 function renderSabotagePhase(s, me, box) {
   const title = document.createElement('h3');
@@ -873,7 +897,10 @@ function renderSabotagePhase(s, me, box) {
   box.appendChild(title);
 
   const handIds = new Set((me.sabotageHand || []).map((c) => c.id));
-  Object.keys(sabotagePlayState).forEach((id) => { if (!handIds.has(id)) delete sabotagePlayState[id]; });
+  if (sabotageSelectedCardId && !handIds.has(sabotageSelectedCardId)) {
+    sabotageSelectedCardId = null;
+    sabotagePlayParams = {};
+  }
 
   // 1. 自分が対応すべき妨害（他プレイヤーから受けたカードで、自分の選択が必要なもの）
   (me.pendingSabotageChoices || []).forEach((choice) => {
@@ -938,19 +965,18 @@ function renderSabotagePhase(s, me, box) {
   const otherPlayers = s.players.filter((p) => p.id !== s.myId);
   const info = document.createElement('div');
   info.className = 'hint';
-  info.textContent = '妨害カードを使うかどうか選んでください（0〜2枚）。使わなかったカードは捨てられます。';
+  info.textContent = '2枚のうち、使うカードを1枚だけ選んでください（使わなくても構いません）。選ぶと効果の対象を指定できます。';
   box.appendChild(info);
 
   const handRow = document.createElement('div');
   handRow.className = 'sabotage-hand';
   (me.sabotageHand || []).forEach((card) => {
-    if (!sabotagePlayState[card.id]) {
-      sabotagePlayState[card.id] = { use: false, targetPlayerId: otherPlayers[0] ? otherPlayers[0].id : '' };
-    }
-    const state = sabotagePlayState[card.id];
+    const validTargets = getValidSabotageTargets(card, me, otherPlayers);
+    const usable = validTargets.length > 0;
+    const isSelected = sabotageSelectedCardId === card.id;
 
     const cardBox = document.createElement('div');
-    cardBox.className = 'sabotage-card' + (state.use ? ' active' : '');
+    cardBox.className = 'sabotage-card' + (isSelected ? ' active' : '') + (usable ? '' : ' disabled');
 
     const head = document.createElement('div');
     head.className = 'sabotage-card-head';
@@ -962,37 +988,43 @@ function renderSabotagePhase(s, me, box) {
     desc.textContent = card.desc;
     cardBox.appendChild(desc);
 
-    const useLabel = document.createElement('label');
-    useLabel.className = 'sabotage-use-toggle';
-    const useCheckbox = document.createElement('input');
-    useCheckbox.type = 'checkbox';
-    useCheckbox.checked = state.use;
-    useCheckbox.addEventListener('change', () => { state.use = useCheckbox.checked; render(); });
-    useLabel.appendChild(useCheckbox);
-    useLabel.appendChild(document.createTextNode(' このカードを使う'));
-    cardBox.appendChild(useLabel);
+    if (!usable) {
+      cardBox.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（このカードを使える対象がいません）' }));
+      handRow.appendChild(cardBox);
+      return;
+    }
 
-    if (state.use) {
+    const selectBtn = document.createElement('button');
+    selectBtn.textContent = isSelected ? '選択中（もう一度押すと解除）' : 'このカードを使う';
+    selectBtn.className = isSelected ? 'primary' : '';
+    selectBtn.addEventListener('click', () => {
+      sabotageSelectedCardId = isSelected ? null : card.id;
+      sabotagePlayParams = {};
+      render();
+    });
+    cardBox.appendChild(selectBtn);
+
+    if (isSelected) {
       cardBox.appendChild(makeLabeledSelect(
         '対象プレイヤー：',
-        otherPlayers.map((op) => ({ value: op.id, label: op.name })),
-        state, 'targetPlayerId', false,
+        validTargets.map((op) => ({ value: op.id, label: op.name })),
+        sabotagePlayParams, 'targetPlayerId', false,
       ));
-      const target = s.players.find((p) => p.id === state.targetPlayerId);
+      const target = s.players.find((p) => p.id === sabotagePlayParams.targetPlayerId);
 
       if (card.type === 'custMutualSwap') {
-        cardBox.appendChild(makeLabeledSelect('自分の客層：', me.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), state, 'myIndex', true));
-        if (target) cardBox.appendChild(makeLabeledSelect('相手の客層：', target.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), state, 'targetIndex', true));
+        cardBox.appendChild(makeLabeledSelect('自分の客層：', me.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), sabotagePlayParams, 'myIndex', true));
+        if (target) cardBox.appendChild(makeLabeledSelect('相手の客層：', target.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), sabotagePlayParams, 'targetIndex', true));
       } else if (card.type === 'custBanType') {
-        cardBox.appendChild(makeLabeledSelect('出禁にする客層タイプ：', CUSTOMER_TABLE_DATA.map((row) => ({ value: row.typeKey, label: row.name })), state, 'typeKey', false));
+        const availableTypes = CUSTOMER_TABLE_DATA.filter((row) => !target || !(target.bannedCustomerTypes || []).includes(row.typeKey));
+        cardBox.appendChild(makeLabeledSelect('出禁にする客層タイプ：', availableTypes.map((row) => ({ value: row.typeKey, label: row.name })), sabotagePlayParams, 'typeKey', false));
       } else if (card.type === 'partSwap') {
-        cardBox.appendChild(makeLabeledSelect('自分のパーツ：', me.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), state, 'mySlot', true));
-        if (target) cardBox.appendChild(makeLabeledSelect('相手のパーツ：', target.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), state, 'targetSlot', true));
+        cardBox.appendChild(makeLabeledSelect('自分のパーツ：', me.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), sabotagePlayParams, 'mySlot', true));
+        if (target) cardBox.appendChild(makeLabeledSelect('相手のパーツ：', target.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), sabotagePlayParams, 'targetSlot', true));
       } else if (card.type === 'partLevelDown') {
         if (target) {
           const opts = target.rail.map((c, i) => ((c && (c.kind === 'climb' || c.kind === 'drop')) ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean);
-          if (opts.length) cardBox.appendChild(makeLabeledSelect('相手の巻上/落下パーツ：', opts, state, 'targetSlot', true));
-          else cardBox.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（相手に巻上/落下パーツがありません）' }));
+          cardBox.appendChild(makeLabeledSelect('相手の巻上/落下パーツ：', opts, sabotagePlayParams, 'targetSlot', true));
         }
       }
     }
@@ -1003,34 +1035,35 @@ function renderSabotagePhase(s, me, box) {
 
   const confirmBtn = document.createElement('button');
   confirmBtn.className = 'primary';
-  confirmBtn.textContent = '妨害フェイズを確定';
+  confirmBtn.textContent = sabotageSelectedCardId ? '選んだカードを使用して確定' : '何も使わずに確定';
   confirmBtn.addEventListener('click', () => {
     const plays = [];
-    for (const card of (me.sabotageHand || [])) {
-      const state = sabotagePlayState[card.id];
-      if (!state || !state.use) continue;
-      if (!state.targetPlayerId) { alert('対象プレイヤーを選んでください'); return; }
-      const play = { cardId: card.id, targetPlayerId: state.targetPlayerId };
+    if (sabotageSelectedCardId) {
+      const card = (me.sabotageHand || []).find((c) => c.id === sabotageSelectedCardId);
+      if (!card) { alert('カード情報が更新されました。選び直してください'); sabotageSelectedCardId = null; render(); return; }
+      if (!sabotagePlayParams.targetPlayerId) { alert('対象プレイヤーを選んでください'); return; }
+      const play = { cardId: card.id, targetPlayerId: sabotagePlayParams.targetPlayerId };
       if (card.type === 'custMutualSwap') {
-        if (state.myIndex === undefined || state.targetIndex === undefined) { alert('客層を選んでください'); return; }
-        play.myIndex = state.myIndex;
-        play.targetIndex = state.targetIndex;
+        if (sabotagePlayParams.myIndex === undefined || sabotagePlayParams.targetIndex === undefined) { alert('客層を選んでください'); return; }
+        play.myIndex = sabotagePlayParams.myIndex;
+        play.targetIndex = sabotagePlayParams.targetIndex;
       } else if (card.type === 'custBanType') {
-        if (!state.typeKey) { alert('客層タイプを選んでください'); return; }
-        play.typeKey = state.typeKey;
+        if (!sabotagePlayParams.typeKey) { alert('客層タイプを選んでください'); return; }
+        play.typeKey = sabotagePlayParams.typeKey;
       } else if (card.type === 'partSwap') {
-        if (state.mySlot === undefined || state.targetSlot === undefined) { alert('パーツを選んでください'); return; }
-        play.mySlot = state.mySlot;
-        play.targetSlot = state.targetSlot;
+        if (sabotagePlayParams.mySlot === undefined || sabotagePlayParams.targetSlot === undefined) { alert('パーツを選んでください'); return; }
+        play.mySlot = sabotagePlayParams.mySlot;
+        play.targetSlot = sabotagePlayParams.targetSlot;
       } else if (card.type === 'partLevelDown') {
-        if (state.targetSlot === undefined) { alert('パーツを選んでください'); return; }
-        play.targetSlot = state.targetSlot;
+        if (sabotagePlayParams.targetSlot === undefined) { alert('パーツを選んでください'); return; }
+        play.targetSlot = sabotagePlayParams.targetSlot;
       }
       plays.push(play);
     }
     socket.emit('submitSabotage', { plays }, (res) => {
       if (!res.ok) return alert(res.error);
-      sabotagePlayState = {};
+      sabotageSelectedCardId = null;
+      sabotagePlayParams = {};
     });
   });
   box.appendChild(confirmBtn);

@@ -38,11 +38,11 @@ const DROP_DEFS = [
 
 // ---- 客層カード (6種類×2枚=12枚) ----
 const CUSTOMER_TYPES = [
-  { key: 'elder', name: '常連の老人', durability: 2, skillDesc: '全レールにおいてスリル値1以下 → +15', skillPoints: 15 },
+  { key: 'elder', name: '常連の老人', durability: 2, skillDesc: '全レールにおいてスリル値2以下 → +15', skillPoints: 15 },
   { key: 'family', name: '家族連れ', durability: 2, skillDesc: '異なるパーツ種類を5種類以上通過 → +10', skillPoints: 10 },
   { key: 'schoolTrip', name: '修学旅行生', durability: 3, skillDesc: 'スリル値が3マス連続で上昇 → +10', skillPoints: 10 },
   { key: 'streamer', name: '動画配信者', durability: 3, skillDesc: '最終マスが最大スリル値 → +12', skillPoints: 12 },
-  { key: 'couple', name: 'カップル', durability: 4, skillDesc: 'トンネル通過ごとに +4', skillPoints: 4 },
+  { key: 'couple', name: 'カップル', durability: 4, skillDesc: '+4×(トンネル枚数)', skillPoints: 4 },
   { key: 'thrillSeeker', name: '絶叫マニア', durability: 5, skillDesc: 'スリル4以上のマスを3回通過 → +12', skillPoints: 12 },
 ];
 
@@ -80,7 +80,7 @@ const RECORD_DEFS = [
     key: 'maxCustomerSatisfaction',
     label: '満足度記録',
     unit: '満足度',
-    bonus: 10,
+    bonus: 8,
     desc: '自分の客のうち最も満足度が高い1人を選び、その満足度が全プレイヤーの中で最も高かった人にボーナス満足度が贈られます。',
   },
   {

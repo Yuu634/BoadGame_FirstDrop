@@ -361,7 +361,7 @@ class GameRoom {
     if (!current || current.id !== playerId) throw new Error('あなたの妨害ターンではありません');
     if (p.sabotageSubmitted) throw new Error('すでに提出済みです');
     if (!Array.isArray(plays)) throw new Error('不正な入力です');
-    if (plays.length > 2) throw new Error('妨害カードは最大2枚までです');
+    if (plays.length > 1) throw new Error('妨害カードは1枚のみ使用できます');
 
     const usedCardIds = new Set();
     for (const play of plays) {
@@ -795,14 +795,14 @@ class GameRoom {
       if (thrillHistory[i] < thrillHistory[i + 1] && thrillHistory[i + 1] < thrillHistory[i + 2]) has3Consecutive = true;
     }
     const thrill4PlusCount = thrillHistory.filter((t) => t >= 4).length;
-    const allThrillAtMost1 = thrillHistory.length > 0 && thrillHistory.every((t) => t <= 1);
+    const allThrillAtMost2 = thrillHistory.length > 0 && thrillHistory.every((t) => t <= 2);
 
     for (const cust of customers) {
       let achieved = false;
       let bonus = 0;
       switch (cust.typeKey) {
         case 'elder':
-          achieved = allThrillAtMost1;
+          achieved = allThrillAtMost2;
           bonus = achieved ? 15 : 0;
           break;
         case 'family':
