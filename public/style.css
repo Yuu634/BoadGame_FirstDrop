@@ -205,6 +205,33 @@ section h2, section h3 { margin: 0 0 8px; }
 .player-head .name { font-weight: 700; }
 .tag { font-size: 11px; background: var(--panel2); padding: 2px 8px; border-radius: 20px; color: var(--muted); }
 
+.player-customers { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.player-customer-chip {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: var(--muted);
+  background: var(--panel2); border-radius: 12px; padding: 2px 8px 2px 4px;
+}
+.player-customer-chip.banned { color: var(--bad); background: #2a1414; }
+
+/* 妨害フェイズ */
+.sabotage-choice-box {
+  background: #2a1c14; border: 1px solid var(--accent); border-radius: 8px; padding: 10px; margin-bottom: 10px;
+}
+.sabotage-hand { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+.sabotage-card {
+  background: var(--panel2); border: 1px solid #34485c; border-radius: 8px; padding: 10px; width: 240px;
+}
+.sabotage-card.active { border-color: var(--accent); background: #241a10; }
+.sabotage-card-head { font-weight: 700; font-size: 13px; color: var(--accent2); }
+.sabotage-card-desc { font-size: 11px; color: var(--muted); margin: 4px 0 8px; line-height: 1.4; }
+.sabotage-use-toggle { display: flex; align-items: center; gap: 6px; font-size: 12px; cursor: pointer; }
+.sabotage-field { margin-top: 6px; }
+.sabotage-field select { width: 100%; padding: 4px; border-radius: 6px; border: 1px solid #34485c; background: #0f1720; color: var(--text); }
+
+/* 復旧フェイズ */
+.recovery-task-box {
+  background: var(--panel2); border: 1px solid #34485c; border-radius: 8px; padding: 10px; margin-bottom: 10px;
+}
+
 .rail-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
 .rail { display: flex; gap: 4px; flex-wrap: wrap; }
 /* レール設置枚数16の時は1行目に0(スタート)〜8、2行目に9〜16を並べ、マス1とマス9の横軸（列）を揃える */

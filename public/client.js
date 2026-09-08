@@ -56,17 +56,24 @@ const PHASE_LABEL = {
   lobby: 'ロビー：参加者待ち',
   draft: 'ドラフトフェイズ',
   placement: '配置フェイズ',
+  sabotage: '妨害フェイズ',
+  recovery: '復旧フェイズ',
   trial: '試運転フェイズ',
   finished: '結果発表',
+};
+
+const SABOTAGE_LABELS = {
+  customer: '客層妨害',
+  part: 'パーツ妨害',
 };
 
 const SAFETY_NOTE = '条件を満たさないと安全装置作動（スリル0・以降の満足度はこの直前の値で固定される）';
 
 const PART_INFO = {
   curve: { desc: '条件なし。通過すると速度-1。誰でも安心して置ける基本パーツ。' },
-  twist: { desc: `進入時の速度がちょうど2のときだけ使用可能。成功すると速度-1。${SAFETY_NOTE}。` },
-  airtime: { desc: `進入時の速度がちょうど3のときだけ使用可能。成功すると速度-1。${SAFETY_NOTE}。` },
-  loop: { desc: `進入時の速度がちょうど4のときだけ使用可能。成功すると速度-1。${SAFETY_NOTE}。全ゲームで3枚しかない希少パーツ。` },
+  twist: { desc: `進入時の速度が1か2のときだけ使用可能。成功すると速度-1。${SAFETY_NOTE}。` },
+  airtime: { desc: `進入時の速度が2か3のときだけ使用可能。成功すると速度-1。${SAFETY_NOTE}。` },
+  loop: { desc: `進入時の速度が3か4のときだけ使用可能。成功すると速度-1。${SAFETY_NOTE}。全ゲームで3枚しかない希少パーツ。` },
   tunnel: { desc: '速度-1。進入した瞬間（このマスに来た時点）の速度が、そのままスリル値になる（速いほど高スリル）。安全装置の対象外。' },
   brake: { desc: '配置するときに「下げる量」を自分で決める。このマスに来た時点の速度からその分だけ下げる（速度が足りなければ下げられる分だけ）。下げた分がそのままスリル値になる。' },
 };
@@ -547,8 +554,29 @@ function renderPlayersBoard(s) {
     head.innerHTML = `<span class="name">${p.name}${isMe ? '（あなた）' : ''}${p.id === s.hostId ? ' 👑' : ''}</span>
       ${p.connected ? '' : '<span class="tag">切断中</span>'}
       ${s.phase === 'placement' ? `<span class="tag">${p.placedThisRound ? '配置済み' : '配置待ち'}</span>` : ''}
-      ${s.phase === 'draft' ? `<span class="tag">${p.hasPendingPick ? '選択済み' : '選択待ち'}</span>` : ''}`;
+      ${s.phase === 'draft' ? `<span class="tag">${p.hasPendingPick ? '選択済み' : '選択待ち'}</span>` : ''}
+      ${s.phase === 'sabotage' ? `<span class="tag">${p.pendingSabotageChoices && p.pendingSabotageChoices.length ? '対応待ち' : (p.sabotageSubmitted ? '提出済み' : '選択中')}</span>` : ''}
+      ${s.phase === 'recovery' ? `<span class="tag">${p.recoveryTasks && p.recoveryTasks.length ? '復旧待ち' : '完了'}</span>` : ''}`;
     panel.appendChild(head);
+
+    if (p.customers && p.customers.length) {
+      const custRow = document.createElement('div');
+      custRow.className = 'player-customers';
+      p.customers.forEach((c) => {
+        const chip = document.createElement('span');
+        chip.className = 'player-customer-chip';
+        chip.title = `${c.name}（スリル耐性${c.durability}）`;
+        chip.innerHTML = `${customerIcon(c.typeKey, 'customer-icon-img small')}${c.name}`;
+        custRow.appendChild(chip);
+      });
+      if (p.bannedCustomerTypes && p.bannedCustomerTypes.length) {
+        const banChip = document.createElement('span');
+        banChip.className = 'player-customer-chip banned';
+        banChip.textContent = `🚫出禁：${p.bannedCustomerTypes.map((tk) => (CUSTOMER_TABLE_DATA.find((r) => r.typeKey === tk) || {}).name || tk).join('・')}`;
+        custRow.appendChild(banChip);
+      }
+      panel.appendChild(custRow);
+    }
 
     const isGrid16 = p.rail.length > 8;
     const rail = document.createElement('div');
@@ -782,6 +810,321 @@ function renderMyControls(s) {
     }
     return;
   }
+
+  if (s.phase === 'sabotage') {
+    renderSabotagePhase(s, me, box);
+    return;
+  }
+
+  if (s.phase === 'recovery') {
+    renderRecoveryPhase(s, me, box);
+    return;
+  }
+}
+
+function makeLabeledSelect(labelText, options, state, key, numeric) {
+  if (state[key] === undefined && options.length) state[key] = options[0].value;
+  const wrap = document.createElement('div');
+  wrap.className = 'sabotage-field';
+  const label = document.createElement('div');
+  label.className = 'hint';
+  label.textContent = labelText;
+  wrap.appendChild(label);
+  const select = document.createElement('select');
+  options.forEach((o) => {
+    const opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = o.label;
+    if (String(o.value) === String(state[key])) opt.selected = true;
+    select.appendChild(opt);
+  });
+  select.addEventListener('change', () => {
+    state[key] = numeric ? Number(select.value) : select.value;
+    render();
+  });
+  wrap.appendChild(select);
+  return wrap;
+}
+
+// ---------- 妨害フェイズ ----------
+let sabotagePlayState = {}; // cardId -> { use, targetPlayerId, myIndex, targetIndex, typeKey, mySlot, targetSlot }
+
+function renderSabotagePhase(s, me, box) {
+  const title = document.createElement('h3');
+  title.textContent = '妨害フェイズ（相手を妨害するか、妨害への対応をしてください）';
+  box.appendChild(title);
+
+  const handIds = new Set((me.sabotageHand || []).map((c) => c.id));
+  Object.keys(sabotagePlayState).forEach((id) => { if (!handIds.has(id)) delete sabotagePlayState[id]; });
+
+  // 1. 自分が対応すべき妨害（他プレイヤーから受けたカードで、自分の選択が必要なもの）
+  (me.pendingSabotageChoices || []).forEach((choice) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'sabotage-choice-box';
+    const desc = document.createElement('div');
+    desc.className = 'hint';
+    desc.textContent = `⚠ ${choice.casterName} が「${choice.cardLabel}」を使用しました。対応してください：`;
+    wrap.appendChild(desc);
+
+    if (choice.type === 'custRandomSwap') {
+      const state = {};
+      wrap.appendChild(makeLabeledSelect(
+        '入れ替える自分の客層：',
+        me.customers.map((c, i) => ({ value: i, label: `${c.name}（スリル耐性${c.durability}）` })),
+        state, 'idx', true,
+      ));
+      const btn = document.createElement('button');
+      btn.textContent = 'この客層を入れ替える';
+      btn.addEventListener('click', () => {
+        socket.emit('resolveSabotageChoice', { choiceId: choice.id, customerIndex: state.idx }, (res) => {
+          if (!res.ok) alert(res.error);
+        });
+      });
+      wrap.appendChild(btn);
+    } else if (choice.type === 'partDestroy') {
+      const filledSlots = me.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean);
+      if (filledSlots.length === 0) {
+        wrap.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（設置済みのパーツがありません）' }));
+      } else {
+        const state = {};
+        wrap.appendChild(makeLabeledSelect('破壊させる自分のパーツ：', filledSlots, state, 'idx', true));
+        const btn = document.createElement('button');
+        btn.textContent = 'このパーツを破壊させる';
+        btn.addEventListener('click', () => {
+          socket.emit('resolveSabotageChoice', { choiceId: choice.id, slot: state.idx }, (res) => {
+            if (!res.ok) alert(res.error);
+          });
+        });
+        wrap.appendChild(btn);
+      }
+    }
+    box.appendChild(wrap);
+  });
+
+  // 2. 自分の妨害カードの使用
+  if (me.sabotageSubmitted) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '妨害カードは提出済みです。他のプレイヤーを待っています…' }));
+    return;
+  }
+
+  const otherPlayers = s.players.filter((p) => p.id !== s.myId);
+  const info = document.createElement('div');
+  info.className = 'hint';
+  info.textContent = '妨害カードを使うかどうか選んでください（0〜2枚）。使わなかったカードは捨てられます。';
+  box.appendChild(info);
+
+  const handRow = document.createElement('div');
+  handRow.className = 'sabotage-hand';
+  (me.sabotageHand || []).forEach((card) => {
+    if (!sabotagePlayState[card.id]) {
+      sabotagePlayState[card.id] = { use: false, targetPlayerId: otherPlayers[0] ? otherPlayers[0].id : '' };
+    }
+    const state = sabotagePlayState[card.id];
+
+    const cardBox = document.createElement('div');
+    cardBox.className = 'sabotage-card' + (state.use ? ' active' : '');
+
+    const head = document.createElement('div');
+    head.className = 'sabotage-card-head';
+    head.textContent = `[${SABOTAGE_LABELS[card.category] || ''}] ${card.label}`;
+    cardBox.appendChild(head);
+
+    const desc = document.createElement('div');
+    desc.className = 'sabotage-card-desc';
+    desc.textContent = card.desc;
+    cardBox.appendChild(desc);
+
+    const useLabel = document.createElement('label');
+    useLabel.className = 'sabotage-use-toggle';
+    const useCheckbox = document.createElement('input');
+    useCheckbox.type = 'checkbox';
+    useCheckbox.checked = state.use;
+    useCheckbox.addEventListener('change', () => { state.use = useCheckbox.checked; render(); });
+    useLabel.appendChild(useCheckbox);
+    useLabel.appendChild(document.createTextNode(' このカードを使う'));
+    cardBox.appendChild(useLabel);
+
+    if (state.use) {
+      cardBox.appendChild(makeLabeledSelect(
+        '対象プレイヤー：',
+        otherPlayers.map((op) => ({ value: op.id, label: op.name })),
+        state, 'targetPlayerId', false,
+      ));
+      const target = s.players.find((p) => p.id === state.targetPlayerId);
+
+      if (card.type === 'custMutualSwap') {
+        cardBox.appendChild(makeLabeledSelect('自分の客層：', me.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), state, 'myIndex', true));
+        if (target) cardBox.appendChild(makeLabeledSelect('相手の客層：', target.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), state, 'targetIndex', true));
+      } else if (card.type === 'custBanType') {
+        cardBox.appendChild(makeLabeledSelect('出禁にする客層タイプ：', CUSTOMER_TABLE_DATA.map((row) => ({ value: row.typeKey, label: row.name })), state, 'typeKey', false));
+      } else if (card.type === 'partSwap') {
+        cardBox.appendChild(makeLabeledSelect('自分のパーツ：', me.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), state, 'mySlot', true));
+        if (target) cardBox.appendChild(makeLabeledSelect('相手のパーツ：', target.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), state, 'targetSlot', true));
+      } else if (card.type === 'partLevelDown') {
+        if (target) {
+          const opts = target.rail.map((c, i) => ((c && (c.kind === 'climb' || c.kind === 'drop')) ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean);
+          if (opts.length) cardBox.appendChild(makeLabeledSelect('相手の巻上/落下パーツ：', opts, state, 'targetSlot', true));
+          else cardBox.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（相手に巻上/落下パーツがありません）' }));
+        }
+      }
+    }
+
+    handRow.appendChild(cardBox);
+  });
+  box.appendChild(handRow);
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'primary';
+  confirmBtn.textContent = '妨害フェイズを確定';
+  confirmBtn.addEventListener('click', () => {
+    const plays = [];
+    for (const card of (me.sabotageHand || [])) {
+      const state = sabotagePlayState[card.id];
+      if (!state || !state.use) continue;
+      if (!state.targetPlayerId) { alert('対象プレイヤーを選んでください'); return; }
+      const play = { cardId: card.id, targetPlayerId: state.targetPlayerId };
+      if (card.type === 'custMutualSwap') {
+        if (state.myIndex === undefined || state.targetIndex === undefined) { alert('客層を選んでください'); return; }
+        play.myIndex = state.myIndex;
+        play.targetIndex = state.targetIndex;
+      } else if (card.type === 'custBanType') {
+        if (!state.typeKey) { alert('客層タイプを選んでください'); return; }
+        play.typeKey = state.typeKey;
+      } else if (card.type === 'partSwap') {
+        if (state.mySlot === undefined || state.targetSlot === undefined) { alert('パーツを選んでください'); return; }
+        play.mySlot = state.mySlot;
+        play.targetSlot = state.targetSlot;
+      } else if (card.type === 'partLevelDown') {
+        if (state.targetSlot === undefined) { alert('パーツを選んでください'); return; }
+        play.targetSlot = state.targetSlot;
+      }
+      plays.push(play);
+    }
+    socket.emit('submitSabotage', { plays }, (res) => {
+      if (!res.ok) return alert(res.error);
+      sabotagePlayState = {};
+    });
+  });
+  box.appendChild(confirmBtn);
+}
+
+// ---------- 復旧フェイズ ----------
+let recoveryChoiceState = {}; // taskId -> { cardId, position, brakeReduce }
+
+function renderRecoveryPhase(s, me, box) {
+  const title = document.createElement('h3');
+  title.textContent = '復旧フェイズ';
+  box.appendChild(title);
+
+  const taskIds = new Set((me.recoveryTasks || []).map((t) => t.id));
+  Object.keys(recoveryChoiceState).forEach((id) => { if (!taskIds.has(id)) delete recoveryChoiceState[id]; });
+
+  if (!me.recoveryTasks || me.recoveryTasks.length === 0) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '復旧の必要はありません。他のプレイヤーの復旧を待っています…' }));
+    return;
+  }
+
+  me.recoveryTasks.forEach((task) => {
+    if (!recoveryChoiceState[task.id]) recoveryChoiceState[task.id] = {};
+    const state = recoveryChoiceState[task.id];
+
+    const wrap = document.createElement('div');
+    wrap.className = 'recovery-task-box';
+    const label = document.createElement('div');
+    label.className = 'hint';
+    const beforeOk = task.type === 'swapped' && task.slot - 1 >= 0 && !me.rail[task.slot - 1];
+    const afterOk = task.type === 'swapped' && task.slot + 1 < me.rail.length && !me.rail[task.slot + 1];
+    if (task.type === 'destroyed') {
+      label.textContent = `マス${task.slot + 1}が破壊されました。一般パーツを${task.drawnCards.length}枚引きました。1枚選んでそのマスに設置できます（設置しなくても構いません）：`;
+    } else if (beforeOk || afterOk) {
+      const parts = [];
+      if (beforeOk) parts.push(`マス${task.slot}`);
+      if (afterOk) parts.push(`マス${task.slot + 2}`);
+      label.textContent = `マス${task.slot + 1}のパーツが交換されました。一般パーツを${task.drawnCards.length}枚引きました。${parts.join(' か ')}（空いている方）に設置できます：`;
+    } else {
+      label.textContent = `マス${task.slot + 1}のパーツが交換されました。一般パーツを${task.drawnCards.length}枚引きましたが、前後とも空きマスがないため設置できません。`;
+    }
+    wrap.appendChild(label);
+
+    if (task.type !== 'swapped' || beforeOk || afterOk) {
+      const optionsRow = document.createElement('div');
+      optionsRow.className = 'card-option-grid';
+      task.drawnCards.forEach((c) => {
+        const e = makeCardOptionBox(c, true, () => {
+          state.cardId = state.cardId === c.id ? null : c.id;
+          render();
+        });
+        if (c.id === state.cardId) e.classList.add('chosen');
+        optionsRow.appendChild(e);
+      });
+      wrap.appendChild(optionsRow);
+
+      if (state.cardId) {
+        const card = task.drawnCards.find((c) => c.id === state.cardId);
+        if (task.type === 'swapped') {
+          const posWrap = document.createElement('div');
+          posWrap.className = 'sabotage-field';
+          if (beforeOk) {
+            const b = document.createElement('button');
+            b.textContent = `マス${task.slot}に設置`;
+            b.className = state.position === 'before' ? 'primary' : '';
+            b.addEventListener('click', () => { state.position = 'before'; render(); });
+            posWrap.appendChild(b);
+          }
+          if (afterOk) {
+            const b = document.createElement('button');
+            b.textContent = `マス${task.slot + 2}に設置`;
+            b.className = state.position === 'after' ? 'primary' : '';
+            b.addEventListener('click', () => { state.position = 'after'; render(); });
+            posWrap.appendChild(b);
+          }
+          wrap.appendChild(posWrap);
+        }
+        if (card && card.kind === 'part' && card.type === 'brake') {
+          const brakeWrap = document.createElement('div');
+          brakeWrap.className = 'hint';
+          brakeWrap.textContent = 'ブレーキ：下げる速度の値';
+          const input = document.createElement('input');
+          input.type = 'number';
+          input.min = '0';
+          input.value = state.brakeReduce !== undefined ? state.brakeReduce : 0;
+          input.style.width = '60px';
+          input.addEventListener('change', () => { state.brakeReduce = parseInt(input.value, 10) || 0; });
+          brakeWrap.appendChild(input);
+          wrap.appendChild(brakeWrap);
+        }
+
+        const confirmBtn = document.createElement('button');
+        confirmBtn.className = 'primary';
+        confirmBtn.textContent = 'このパーツを設置する';
+        confirmBtn.addEventListener('click', () => {
+          if (task.type === 'swapped' && !state.position) { alert('設置する位置を選んでください'); return; }
+          socket.emit('resolveRecovery', {
+            taskId: task.id,
+            cardId: state.cardId,
+            position: state.position,
+            brakeReduce: state.brakeReduce,
+          }, (res) => {
+            if (!res.ok) return alert(res.error);
+            delete recoveryChoiceState[task.id];
+          });
+        });
+        wrap.appendChild(confirmBtn);
+      }
+    }
+
+    const skipBtn = document.createElement('button');
+    skipBtn.textContent = '設置しない（見送る）';
+    skipBtn.addEventListener('click', () => {
+      socket.emit('resolveRecovery', { taskId: task.id }, (res) => {
+        if (!res.ok) return alert(res.error);
+        delete recoveryChoiceState[task.id];
+      });
+    });
+    wrap.appendChild(skipBtn);
+
+    box.appendChild(wrap);
+  });
 }
 
 function renderTrial() {

@@ -128,6 +128,27 @@ io.on('connection', (socket) => {
     }
   }));
 
+  socket.on('submitSabotage', withRoom((room, playerId, { plays }) => {
+    room.submitSabotage(playerId, plays);
+    if (room.phase === 'trial') {
+      runTrial(room);
+    }
+  }));
+
+  socket.on('resolveSabotageChoice', withRoom((room, playerId, payload) => {
+    room.resolveSabotageChoice(playerId, payload);
+    if (room.phase === 'trial') {
+      runTrial(room);
+    }
+  }));
+
+  socket.on('resolveRecovery', withRoom((room, playerId, payload) => {
+    room.resolveRecovery(playerId, payload);
+    if (room.phase === 'trial') {
+      runTrial(room);
+    }
+  }));
+
   socket.on('disconnect', () => {
     const meta = socketMeta.get(socket.id);
     if (!meta) return;

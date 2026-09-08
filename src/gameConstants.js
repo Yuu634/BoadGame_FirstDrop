@@ -1,13 +1,14 @@
 'use strict';
 
 // ---- 一般パーツ (33枚) ----
+// 進入速度の許容条件（condition）：twist/airtime/loopは「ちょうど1値」ではなく2値のいずれかを許容する
 const PART_DEFS = [
   { type: 'curve', count: 10, thrill: 1, condition: null },
-  { type: 'twist', count: 7, thrill: 2, condition: 2 },
-  { type: 'airtime', count: 5, thrill: 3, condition: 3 },
+  { type: 'twist', count: 7, thrill: 2, condition: [1, 2] },
+  { type: 'airtime', count: 5, thrill: 3, condition: [2, 3] },
   { type: 'tunnel', count: 4, thrill: 0, condition: null },
   { type: 'brake', count: 4, thrill: 0, condition: null },
-  { type: 'loop', count: 3, thrill: 4, condition: 4 },
+  { type: 'loop', count: 3, thrill: 4, condition: [3, 4] },
 ];
 
 const PART_LABELS = {
@@ -91,6 +92,54 @@ const RECORD_DEFS = [
   },
 ];
 
+// ---- 妨害カード（客層妨害3種＋パーツ妨害3種、各4枚＝計24枚） ----
+const SABOTAGE_DEFS = [
+  {
+    type: 'custRandomSwap',
+    category: 'customer',
+    label: '客層ランダム交換',
+    desc: '対象を1人指定する。対象は自分の客層を1人選び、その客層をランダムな新しい客層と入れ替える（入れ替える客層は対象が指定）。',
+    needsTargetChoice: true,
+  },
+  {
+    type: 'custMutualSwap',
+    category: 'customer',
+    label: '客層相互交換',
+    desc: '対象を1人指定し、自分の客層1人と対象の客層1人を、それぞれ自分で選んで入れ替える。',
+    needsTargetChoice: false,
+  },
+  {
+    type: 'custBanType',
+    category: 'customer',
+    label: '客層出禁',
+    desc: '対象を1人指定し、客層を1種類選ぶ。対象には今後そのタイプの客層が公開されなくなる（その回はスキップされる）。',
+    needsTargetChoice: false,
+  },
+  {
+    type: 'partDestroy',
+    category: 'part',
+    label: 'パーツ破壊',
+    desc: '対象を1人指定する。対象は自分のレールに設置済みのパーツを1つ選び、それを破壊する（空きマスに戻る）。破壊された対象は復旧フェイズを行う。',
+    needsTargetChoice: true,
+  },
+  {
+    type: 'partSwap',
+    category: 'part',
+    label: 'パーツ交換',
+    desc: '対象を1人指定し、自分のパーツ1つと対象のパーツ1つを、それぞれ自分で選んで入れ替える。両者とも復旧フェイズを行う。',
+    needsTargetChoice: false,
+  },
+  {
+    type: 'partLevelDown',
+    category: 'part',
+    label: 'レベルダウン',
+    desc: '対象を1人指定し、対象の巻上または落下パーツを1つ選ぶ。そのレベルを1下げる（Lv2はこれ以上下げられないため破壊され、復旧フェイズを行う）。',
+    needsTargetChoice: false,
+  },
+];
+const SABOTAGE_COPIES_PER_TYPE = 4;
+const SABOTAGE_LABELS = Object.fromEntries(SABOTAGE_DEFS.map((d) => [d.type, d.label]));
+
 function shuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -146,6 +195,16 @@ function pickRecords(n) {
   return shuffle(RECORD_DEFS).slice(0, n);
 }
 
+function buildSabotageDeck() {
+  const cards = [];
+  for (const def of SABOTAGE_DEFS) {
+    for (let i = 0; i < SABOTAGE_COPIES_PER_TYPE; i++) {
+      cards.push({ id: nextId('sab'), type: def.type, category: def.category, label: def.label, desc: def.desc });
+    }
+  }
+  return shuffle(cards);
+}
+
 function buildCustomerDeck() {
   const cards = [];
   for (const t of CUSTOMER_TYPES) {
@@ -171,10 +230,14 @@ module.exports = {
   END_ALTITUDE_ZERO_BONUS_POINTS,
   RECORD_DEFS,
   pickRecords,
+  SABOTAGE_DEFS,
+  SABOTAGE_LABELS,
+  SABOTAGE_COPIES_PER_TYPE,
   shuffle,
   nextId,
   buildGeneralDeck,
   buildClimbDeck,
   buildDropDeck,
   buildCustomerDeck,
+  buildSabotageDeck,
 };
