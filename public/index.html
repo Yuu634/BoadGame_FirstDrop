@@ -48,7 +48,7 @@
       <summary>📜 ゲームルール説明（クリックで開閉）</summary>
       <div class="rules-body">
         <p><b>目的：</b>2〜4人で同時にコースターを設計します。ラウンドを重ねてレールを完成させ、試運転の結果でもっとも高い合計満足度を出したプレイヤーが勝利です。</p>
-        <p><b>ルール設定（ロビーでホストが変更可能）：</b>レール設置枚数（8 or 16マス、枚数に応じてラウンド数も自動で変わります）、終了時高度0ボーナスの有無、記録更新機能の有無を選べます。</p>
+        <p><b>ルール設定（ロビーでホストが変更可能）：</b>レール設置枚数（8 or 16マス、枚数に応じてラウンド数も自動で変わります）、終了時高度0ボーナスの有無、記録更新機能の有無、妨害モードの有無を選べます。妨害モードを無にすると、配置フェイズの後はすぐに次のラウンド（または試運転）に進みます。</p>
         <p><b>ラウンドの流れ（レール設置枚数に応じて全4 or 8ラウンド）：</b></p>
         <ol>
           <li>そのラウンドの客層カードが1人公開されます（最終ラウンド終了時に4人揃います）。</li>
@@ -135,6 +135,13 @@
         <div class="settings-row">
           <label>記録更新機能</label>
           <div class="settings-options" id="settingRecords">
+            <button type="button" class="settings-opt" data-value="false">無</button>
+            <button type="button" class="settings-opt" data-value="true">有</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <label>妨害モード</label>
+          <div class="settings-options" id="settingSabotage">
             <button type="button" class="settings-opt" data-value="false">無</button>
             <button type="button" class="settings-opt" data-value="true">有</button>
           </div>

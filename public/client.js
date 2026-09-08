@@ -272,6 +272,7 @@ function wireSettingsGroup(containerId, field, parse) {
 wireSettingsGroup('settingRailSize', 'railSize', (v) => Number(v));
 wireSettingsGroup('settingAltitudeBonus', 'endAltitudeZeroBonus', (v) => v === 'true');
 wireSettingsGroup('settingRecords', 'recordsEnabled', (v) => v === 'true');
+wireSettingsGroup('settingSabotage', 'sabotageEnabled', (v) => v === 'true');
 
 function renderSettingsBox(s) {
   if (!s.settings) return;
@@ -280,6 +281,7 @@ function renderSettingsBox(s) {
     { id: 'settingRailSize', value: String(s.settings.railSize) },
     { id: 'settingAltitudeBonus', value: String(s.settings.endAltitudeZeroBonus) },
     { id: 'settingRecords', value: String(s.settings.recordsEnabled) },
+    { id: 'settingSabotage', value: String(s.settings.sabotageEnabled) },
   ];
   groups.forEach((g) => {
     const container = el(g.id);
@@ -1103,85 +1105,95 @@ function renderRecoveryPhase(s, me, box) {
     wrap.className = 'recovery-task-box';
     const label = document.createElement('div');
     label.className = 'hint';
-    const beforeOk = task.type === 'swapped' && task.slot - 1 >= 0 && !me.rail[task.slot - 1];
-    const afterOk = task.type === 'swapped' && task.slot + 1 < me.rail.length && !me.rail[task.slot + 1];
     if (task.type === 'destroyed') {
       label.textContent = `マス${task.slot + 1}が破壊されました。一般パーツを${task.drawnCards.length}枚引きました。1枚選んでそのマスに設置できます（設置しなくても構いません）：`;
-    } else if (beforeOk || afterOk) {
-      const parts = [];
-      if (beforeOk) parts.push(`マス${task.slot}`);
-      if (afterOk) parts.push(`マス${task.slot + 2}`);
-      label.textContent = `マス${task.slot + 1}のパーツが交換されました。一般パーツを${task.drawnCards.length}枚引きました。${parts.join(' か ')}（空いている方）に設置できます：`;
     } else {
-      label.textContent = `マス${task.slot + 1}のパーツが交換されました。一般パーツを${task.drawnCards.length}枚引きましたが、前後とも空きマスがないため設置できません。`;
+      label.textContent = `マス${task.slot + 1}のパーツが交換されました。一般パーツを${task.drawnCards.length}枚引きました。そのマス、またはその前後1マスに設置できます（すでにパーツがあっても上書きされます）：`;
     }
     wrap.appendChild(label);
 
-    if (task.type !== 'swapped' || beforeOk || afterOk) {
-      const optionsRow = document.createElement('div');
-      optionsRow.className = 'card-option-grid';
-      task.drawnCards.forEach((c) => {
-        const e = makeCardOptionBox(c, true, () => {
-          state.cardId = state.cardId === c.id ? null : c.id;
-          render();
-        });
-        if (c.id === state.cardId) e.classList.add('chosen');
-        optionsRow.appendChild(e);
+    // 同じ見た目（種類・レベル）のカードが複数枚引かれても、選択肢としては1つだけ表示する
+    const seenSig = new Set();
+    const uniqueCards = task.drawnCards.filter((c) => {
+      const sig = `${c.kind}:${c.type || ''}:${c.value || ''}`;
+      if (seenSig.has(sig)) return false;
+      seenSig.add(sig);
+      return true;
+    });
+
+    const optionsRow = document.createElement('div');
+    optionsRow.className = 'card-option-grid';
+    uniqueCards.forEach((c) => {
+      const e = makeCardOptionBox(c, true, () => {
+        state.cardId = state.cardId === c.id ? null : c.id;
+        render();
       });
-      wrap.appendChild(optionsRow);
+      if (c.id === state.cardId) e.classList.add('chosen');
+      optionsRow.appendChild(e);
+    });
+    wrap.appendChild(optionsRow);
 
-      if (state.cardId) {
-        const card = task.drawnCards.find((c) => c.id === state.cardId);
-        if (task.type === 'swapped') {
-          const posWrap = document.createElement('div');
-          posWrap.className = 'sabotage-field';
-          if (beforeOk) {
-            const b = document.createElement('button');
-            b.textContent = `マス${task.slot}に設置`;
-            b.className = state.position === 'before' ? 'primary' : '';
-            b.addEventListener('click', () => { state.position = 'before'; render(); });
-            posWrap.appendChild(b);
-          }
-          if (afterOk) {
-            const b = document.createElement('button');
-            b.textContent = `マス${task.slot + 2}に設置`;
-            b.className = state.position === 'after' ? 'primary' : '';
-            b.addEventListener('click', () => { state.position = 'after'; render(); });
-            posWrap.appendChild(b);
-          }
-          wrap.appendChild(posWrap);
+    if (state.cardId) {
+      const card = task.drawnCards.find((c) => c.id === state.cardId);
+      if (task.type === 'swapped') {
+        const selfOk = task.slot >= 0 && task.slot < me.rail.length;
+        const beforeOk = task.slot - 1 >= 0;
+        const afterOk = task.slot + 1 < me.rail.length;
+        const posWrap = document.createElement('div');
+        posWrap.className = 'sabotage-field';
+        if (beforeOk) {
+          const b = document.createElement('button');
+          b.textContent = `マス${task.slot}に設置${me.rail[task.slot - 1] ? '（上書き）' : ''}`;
+          b.className = state.position === 'before' ? 'primary' : '';
+          b.addEventListener('click', () => { state.position = 'before'; render(); });
+          posWrap.appendChild(b);
         }
-        if (card && card.kind === 'part' && card.type === 'brake') {
-          const brakeWrap = document.createElement('div');
-          brakeWrap.className = 'hint';
-          brakeWrap.textContent = 'ブレーキ：下げる速度の値';
-          const input = document.createElement('input');
-          input.type = 'number';
-          input.min = '0';
-          input.value = state.brakeReduce !== undefined ? state.brakeReduce : 0;
-          input.style.width = '60px';
-          input.addEventListener('change', () => { state.brakeReduce = parseInt(input.value, 10) || 0; });
-          brakeWrap.appendChild(input);
-          wrap.appendChild(brakeWrap);
+        if (selfOk) {
+          const b = document.createElement('button');
+          b.textContent = `マス${task.slot + 1}（交換されたマス）に設置${me.rail[task.slot] ? '（上書き）' : ''}`;
+          b.className = state.position === 'self' ? 'primary' : '';
+          b.addEventListener('click', () => { state.position = 'self'; render(); });
+          posWrap.appendChild(b);
         }
-
-        const confirmBtn = document.createElement('button');
-        confirmBtn.className = 'primary';
-        confirmBtn.textContent = 'このパーツを設置する';
-        confirmBtn.addEventListener('click', () => {
-          if (task.type === 'swapped' && !state.position) { alert('設置する位置を選んでください'); return; }
-          socket.emit('resolveRecovery', {
-            taskId: task.id,
-            cardId: state.cardId,
-            position: state.position,
-            brakeReduce: state.brakeReduce,
-          }, (res) => {
-            if (!res.ok) return alert(res.error);
-            delete recoveryChoiceState[task.id];
-          });
-        });
-        wrap.appendChild(confirmBtn);
+        if (afterOk) {
+          const b = document.createElement('button');
+          b.textContent = `マス${task.slot + 2}に設置${me.rail[task.slot + 1] ? '（上書き）' : ''}`;
+          b.className = state.position === 'after' ? 'primary' : '';
+          b.addEventListener('click', () => { state.position = 'after'; render(); });
+          posWrap.appendChild(b);
+        }
+        wrap.appendChild(posWrap);
       }
+      if (card && card.kind === 'part' && card.type === 'brake') {
+        const brakeWrap = document.createElement('div');
+        brakeWrap.className = 'hint';
+        brakeWrap.textContent = 'ブレーキ：下げる速度の値';
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.value = state.brakeReduce !== undefined ? state.brakeReduce : 0;
+        input.style.width = '60px';
+        input.addEventListener('change', () => { state.brakeReduce = parseInt(input.value, 10) || 0; });
+        brakeWrap.appendChild(input);
+        wrap.appendChild(brakeWrap);
+      }
+
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'primary';
+      confirmBtn.textContent = 'このパーツを設置する';
+      confirmBtn.addEventListener('click', () => {
+        if (task.type === 'swapped' && !state.position) { alert('設置する位置を選んでください'); return; }
+        socket.emit('resolveRecovery', {
+          taskId: task.id,
+          cardId: state.cardId,
+          position: state.position,
+          brakeReduce: state.brakeReduce,
+        }, (res) => {
+          if (!res.ok) return alert(res.error);
+          delete recoveryChoiceState[task.id];
+        });
+      });
+      wrap.appendChild(confirmBtn);
     }
 
     const skipBtn = document.createElement('button');

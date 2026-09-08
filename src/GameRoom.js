@@ -91,12 +91,13 @@ class GameRoom {
     }
     if (patch.endAltitudeZeroBonus !== undefined) next.endAltitudeZeroBonus = !!patch.endAltitudeZeroBonus;
     if (patch.recordsEnabled !== undefined) next.recordsEnabled = !!patch.recordsEnabled;
+    if (patch.sabotageEnabled !== undefined) next.sabotageEnabled = !!patch.sabotageEnabled;
     this.settings = next;
     // レール枚数が変わったら、ロビー中のプレイヤーのレール配列も合わせておく
     for (const p of this.players) {
       p.rail = new Array(this.settings.railSize).fill(null);
     }
-    this.addLog(`ルール設定を変更しました（レール${this.settings.railSize}マス／着地ボーナス${this.settings.endAltitudeZeroBonus ? '有' : '無'}／記録更新${this.settings.recordsEnabled ? '有' : '無'}）`);
+    this.addLog(`ルール設定を変更しました（レール${this.settings.railSize}マス／着地ボーナス${this.settings.endAltitudeZeroBonus ? '有' : '無'}／記録更新${this.settings.recordsEnabled ? '有' : '無'}／妨害モード${this.settings.sabotageEnabled ? '有' : '無'}）`);
   }
 
   startGame() {
@@ -190,14 +191,39 @@ class GameRoom {
       p.customers.push({ ...cust });
     }
 
-    // ドラフト開始：各3枚配布（巻上・落下も一般パーツと同じ山札から出てくる）
+    // ドラフト開始：各3枚配布（巻上・落下も一般パーツと同じ山札から出てくる。同じプレイヤーの3枚内に重複が出ないようにする）
     for (const p of this.players) {
-      p.draftPacket = [];
-      for (let i = 0; i < 3 && this.generalDeck.length; i++) {
-        p.draftPacket.push(this.generalDeck.shift());
-      }
+      p.draftPacket = this.drawUniqueCards(this.generalDeck, 3, this.generalCardSignature);
     }
     this.addLog('一般パーツがドラフトに配られました');
+  }
+
+  // 山札の先頭から順にcount枚引くが、同じ見た目（signatureFn）のカードが1回の配布内で重複しないようにする。
+  // 重複としてスキップしたカードは山の底に戻すため、デッキ全体のカード総数は減らない。
+  drawUniqueCards(deck, count, signatureFn) {
+    const drawn = [];
+    const skipped = [];
+    const seen = new Set();
+    while (drawn.length < count && deck.length) {
+      const card = deck.shift();
+      const sig = signatureFn(card);
+      if (seen.has(sig)) {
+        skipped.push(card);
+      } else {
+        seen.add(sig);
+        drawn.push(card);
+      }
+    }
+    if (skipped.length) deck.push(...skipped);
+    return drawn;
+  }
+
+  generalCardSignature(card) {
+    return `${card.kind}:${card.type || ''}:${card.value || ''}`;
+  }
+
+  sabotageCardSignature(card) {
+    return card.type;
   }
 
   allSubmittedDraft() {
@@ -316,8 +342,12 @@ class GameRoom {
   }
 
   finishRound() {
-    // パーツ設置フェイズの後は、（次ラウンドや試運転に進む前に）毎ラウンド必ず妨害フェイズに入る
-    this.startSabotagePhase();
+    // パーツ設置フェイズの後は、設定で妨害モードが有効な場合のみ毎ラウンド妨害フェイズに入る
+    if (this.settings.sabotageEnabled) {
+      this.startSabotagePhase();
+    } else {
+      this.afterSabotageAndRecoveryComplete();
+    }
   }
 
   // ---------- 妨害フェイズ（全員同時ではなく、プレイヤーごとに順番に行う） ----------
@@ -333,12 +363,9 @@ class GameRoom {
   }
 
   drawSabotageCards(n) {
-    const out = [];
-    for (let i = 0; i < n; i++) {
-      if (this.sabotageDeck.length === 0) this.sabotageDeck = C.buildSabotageDeck();
-      out.push(this.sabotageDeck.shift());
-    }
-    return out;
+    if (this.sabotageDeck.length < n) this.sabotageDeck = this.sabotageDeck.concat(C.buildSabotageDeck());
+    // 同じプレイヤーに配る妨害カードの種類が重複しないようにする
+    return this.drawUniqueCards(this.sabotageDeck, n, this.sabotageCardSignature);
   }
 
   drawGeneralCards(n) {
@@ -594,11 +621,12 @@ class GameRoom {
         targetSlot = task.slot;
         if (p.rail[targetSlot]) throw new Error('そのマスはすでに埋まっています');
       } else {
+        // パーツ交換の復旧：交換されたマスそのもの、またはその前後1マスに設置できる。
+        // すでにパーツが置かれていても、そこへ上書き（入れ替え）できる。
         const pos = payload.position;
-        if (pos !== 'before' && pos !== 'after') throw new Error('位置を指定してください（前 or 後）');
-        targetSlot = pos === 'before' ? task.slot - 1 : task.slot + 1;
+        if (pos !== 'self' && pos !== 'before' && pos !== 'after') throw new Error('位置を指定してください（そのマス／前／後）');
+        targetSlot = pos === 'self' ? task.slot : pos === 'before' ? task.slot - 1 : task.slot + 1;
         if (targetSlot < 0 || targetSlot >= p.rail.length) throw new Error('その位置にはマスがありません');
-        if (p.rail[targetSlot]) throw new Error('そのマスはすでに埋まっています');
       }
       if (card.kind === 'part' && card.type === 'brake') {
         const raw = Number(payload.brakeReduce);

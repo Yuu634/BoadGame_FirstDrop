@@ -57,6 +57,7 @@ const DEFAULT_SETTINGS = {
   railSize: 8,
   endAltitudeZeroBonus: false,
   recordsEnabled: true,
+  sabotageEnabled: true,
 };
 const END_ALTITUDE_ZERO_BONUS_POINTS = 10;
 
