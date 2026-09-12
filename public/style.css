@@ -203,28 +203,18 @@ section h2, section h3 { margin: 0 0 8px; }
 .customer-icon { display: block; margin-bottom: 4px; }
 .customer-icon .customer-icon-img { width: 56px; height: 56px; }
 
-/* 自分を下、他プレイヤーを上・左・右に配置し、テーブルを囲むようなレイアウトにする */
+/* 自分を一番上にし、全プレイヤーのマップを一列縦に並べる */
 #playersBoard {
-  display: grid;
-  grid-template-columns: 1fr 1.6fr 1fr;
-  grid-template-areas:
-    "left top right"
-    "bottom bottom bottom";
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
 }
 .player-panel {
   background: var(--panel); border-radius: 10px; padding: 10px 14px; border: 1px solid #263444;
   overflow-x: auto;
 }
-.player-panel.pos-top { grid-area: top; }
-.player-panel.pos-left { grid-area: left; }
-.player-panel.pos-right { grid-area: right; }
-.player-panel.pos-bottom { grid-area: bottom; }
 .player-panel.me { border-color: var(--accent); }
-@media (max-width: 860px) {
-  #playersBoard { grid-template-columns: 1fr; grid-template-areas: "top" "left" "right" "bottom"; }
-}
 .player-head { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px; }
 .player-head .name { font-weight: 700; }
 .tag { font-size: 11px; background: var(--panel2); padding: 2px 8px; border-radius: 20px; color: var(--muted); }
@@ -384,6 +374,9 @@ section h2, section h3 { margin: 0 0 8px; }
 #sabotageToast .toast-line {
   font-size: 16px; font-weight: 700; color: var(--text);
   text-align: center; line-height: 1.5;
+}
+#sabotageToast .toast-more {
+  font-size: 11px; color: var(--muted); text-align: center; margin-top: 6px;
 }
 @keyframes toastPop {
   from { opacity: 0; transform: translate(-50%, -50%) scale(0.88); }

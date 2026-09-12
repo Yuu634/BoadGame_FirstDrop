@@ -26,9 +26,9 @@ class GameRoom {
     this.recordResults = [];
     this.sabotageDeck = [];
     this.sabotageOrder = [];
-    this.sabotageTurnIndex = 0; // 補助フェイズは全員同時ではなく、プレイヤーごとに順番に行う
-    this.sabotageEvents = []; // 補助フェイズで「誰が誰に何をしたか」を画面中央に数秒表示するための通知
-    this.sabotageOrder = []; // そのラウンドの補助フェイズの実行順（レール配置位置の合計値が小さい人から順）
+    this.sabotageTurnIndex = 0; // イベントフェイズは全員同時ではなく、プレイヤーごとに順番に行う
+    this.sabotageEvents = []; // イベントフェイズで「誰が誰に何をしたか」を画面中央に数秒表示するための通知
+    this.sabotageOrder = []; // そのラウンドのイベントフェイズの実行順（レール配置位置の合計値が小さい人から順）
     this.recoveryTurnIndex = 0; // 復旧フェイズも同様に順番に行う（タスクがあるプレイヤーだけ）
   }
 
@@ -37,11 +37,13 @@ class GameRoom {
     if (this.log.length > 300) this.log.shift();
   }
 
-  // 補助フェイズの行為内容を、画面中央に数秒表示するための通知として積む。
-  // （ログは流れてしまうため、誰が何をされたのか一目で分かるようにする）
+  // イベントフェイズの行為内容を記録する。
+  // 見逃しを防ぐため、ポップアップ（画面中央に数秒）とログの両方に同じ内容を出す。
+  // ここで両方まとめて処理することで、二つの文言がずれないようにする。
   pushSabotageEvent(text) {
     this.sabotageEvents.push({ id: C.nextId('sabevent'), t: Date.now(), text });
     if (this.sabotageEvents.length > 30) this.sabotageEvents.shift();
+    this.addLog(`🎭 ${text}`);
   }
 
   getPlayer(id) {
@@ -107,7 +109,7 @@ class GameRoom {
     for (const p of this.players) {
       p.rail = new Array(this.settings.railSize).fill(null);
     }
-    this.addLog(`ルール設定を変更しました（レール${this.settings.railSize}マス／着地ボーナス${this.settings.endAltitudeZeroBonus ? '有' : '無'}／記録更新${this.settings.recordsEnabled ? '有' : '無'}／補助モード${this.settings.sabotageEnabled ? '有' : '無'}）`);
+    this.addLog(`ルール設定を変更しました（レール${this.settings.railSize}マス／着地ボーナス${this.settings.endAltitudeZeroBonus ? '有' : '無'}／記録更新${this.settings.recordsEnabled ? '有' : '無'}／イベントモード${this.settings.sabotageEnabled ? '有' : '無'}）`);
   }
 
   startGame() {
@@ -388,7 +390,7 @@ class GameRoom {
   }
 
   finishRound() {
-    // パーツ設置フェイズの後は、設定で補助モードが有効な場合のみ毎ラウンド補助フェイズに入る
+    // パーツ設置フェイズの後は、設定でイベントモードが有効な場合のみ毎ラウンドイベントフェイズに入る
     if (this.settings.sabotageEnabled) {
       this.startSabotagePhase();
     } else {
@@ -396,7 +398,7 @@ class GameRoom {
     }
   }
 
-  // ---------- 補助フェイズ（全員同時ではなく、プレイヤーごとに順番に行う） ----------
+  // ---------- イベントフェイズ（全員同時ではなく、プレイヤーごとに順番に行う） ----------
   // レールに配置した位置（マス番号）の合計値。小さいほどコースの前方に寄っている。
   railPositionSum(p) {
     let sum = 0;
@@ -404,7 +406,7 @@ class GameRoom {
     return sum;
   }
 
-  // 補助フェイズの実行順を決める：配置位置の合計値が小さい人から順番に行う。
+  // イベントフェイズの実行順を決める：配置位置の合計値が小さい人から順番に行う。
   // 同値の場合は席順（playersの並び）をそのまま使う。
   computeSabotageOrder() {
     return this.players
@@ -426,11 +428,13 @@ class GameRoom {
     const orderNames = this.sabotageOrder
       .map((id, i) => `${i + 1}. ${this.getPlayer(id).name}(合計${this.railPositionSum(this.getPlayer(id))})`)
       .join(' → ');
-    this.addLog(`ラウンド${this.round}：配置完了。補助フェイズです（補助カードが2枚ずつ配られました）。実行順：${orderNames}`);
-    this.addLog(`${this.currentSabotagePlayer().name} の補助ターンです`);
+    this.addLog(`ラウンド${this.round}：配置完了。イベントフェイズです（補助カードが2枚ずつ配られました）`);
+    // 実行順は画面上部のバーだけでなく、ログにも残して後から見返せるようにする
+    this.addLog(`🔄 イベントフェイズの実行順（レール配置位置の合計値が小さい人から）：${orderNames}`);
+    this.addLog(`▶ ${this.currentSabotagePlayer().name} のイベントターンです（1人目／全${this.sabotageOrder.length}人）`);
   }
 
-  // 現在の補助ターンのプレイヤー（席順ではなく sabotageOrder に従う）
+  // 現在のイベントターンのプレイヤー（席順ではなく sabotageOrder に従う）
   currentSabotagePlayer() {
     const id = this.sabotageOrder[this.sabotageTurnIndex];
     return id ? this.getPlayer(id) : null;
@@ -535,11 +539,11 @@ class GameRoom {
   }
 
   submitSabotage(playerId, plays) {
-    if (this.phase !== 'sabotage') throw new Error('補助フェイズではありません');
+    if (this.phase !== 'sabotage') throw new Error('イベントフェイズではありません');
     const p = this.getPlayer(playerId);
     if (!p) throw new Error('プレイヤーが見つかりません');
     const current = this.currentSabotagePlayer();
-    if (!current || current.id !== playerId) throw new Error('あなたの補助ターンではありません');
+    if (!current || current.id !== playerId) throw new Error('あなたのイベントターンではありません');
     if (p.sabotageSubmitted) throw new Error('すでに提出済みです');
     if (!Array.isArray(plays)) throw new Error('不正な入力です');
     if (plays.length > 1) throw new Error('補助カードは1枚のみ使用できます');
@@ -583,7 +587,6 @@ class GameRoom {
         replacement.satisfaction = 0;
         replacement.everReset = false;
         target.customers[idx] = replacement;
-        this.addLog(`${caster.name} が ${target.name} の客層「${before.name}」をランダムに「${replacement.name}」と入れ替えました`);
         this.pushSabotageEvent(`${caster.name} → ${target.name}：客層ランダム交換（${before.name} → ${replacement.name}）`);
         break;
       }
@@ -593,10 +596,10 @@ class GameRoom {
         if (!Number.isInteger(myIdx) || myIdx < 0 || myIdx >= caster.customers.length) throw new Error('自分の客層の指定が不正です');
         if (!Number.isInteger(targetIdx) || targetIdx < 0 || targetIdx >= target.customers.length) throw new Error('相手の客層の指定が不正です');
         const tmp = caster.customers[myIdx];
+        const targetCustName = target.customers[targetIdx].name;
         caster.customers[myIdx] = target.customers[targetIdx];
         target.customers[targetIdx] = tmp;
-        this.addLog(`${caster.name} が ${target.name} と客層を交換しました`);
-        this.pushSabotageEvent(`${caster.name} → ${target.name}：客層相互交換`);
+        this.pushSabotageEvent(`${caster.name} → ${target.name}：客層相互交換（${tmp.name} ↔ ${targetCustName}）`);
         break;
       }
       case 'custBanType': {
@@ -604,7 +607,6 @@ class GameRoom {
         const typeDef = C.CUSTOMER_TYPES.find((t) => t.key === typeKey);
         if (!typeDef) throw new Error('客層タイプの指定が不正です');
         target.bannedCustomerTypes.add(typeKey);
-        this.addLog(`${caster.name} が ${target.name} に客層「${typeDef.name}」の出禁を宣告しました`);
         this.pushSabotageEvent(`${caster.name} → ${target.name}：客層出禁（${typeDef.name}）`);
         break;
       }
@@ -617,12 +619,12 @@ class GameRoom {
         if (!Number.isInteger(mySlot) || mySlot < 0 || mySlot >= caster.rail.length || !caster.rail[mySlot]) throw new Error('自分のパーツの指定が不正です');
         if (!Number.isInteger(targetSlot) || targetSlot < 0 || targetSlot >= target.rail.length || !target.rail[targetSlot]) throw new Error('相手のパーツの指定が不正です');
         const tmp = caster.rail[mySlot];
+        const targetPartLabel = target.rail[targetSlot].label;
         caster.rail[mySlot] = target.rail[targetSlot];
         target.rail[targetSlot] = tmp;
         this.queueRecoveryTask(caster, 'swapped', mySlot);
         this.queueRecoveryTask(target, 'swapped', targetSlot);
-        this.addLog(`${caster.name} が ${target.name} とパーツを交換しました`);
-        this.pushSabotageEvent(`${caster.name} → ${target.name}：パーツ交換（マス${mySlot + 1} ↔ マス${targetSlot + 1}）`);
+        this.pushSabotageEvent(`${caster.name} → ${target.name}：パーツ交換（マス${mySlot + 1}の${tmp.label} ↔ マス${targetSlot + 1}の${targetPartLabel}）`);
         break;
       }
       case 'partLevelDown': {
@@ -633,12 +635,10 @@ class GameRoom {
         if (tCard.value > 2) {
           tCard.value -= 1;
           tCard.label = `${tCard.kind === 'climb' ? '巻上' : '落下'}Lv${tCard.value}`;
-          this.addLog(`${caster.name} が ${target.name} の${tCard.label}に下げました`);
           this.pushSabotageEvent(`${caster.name} → ${target.name}：レベルダウン（マス${slot + 1} → ${tCard.label}）`);
         } else {
           target.rail[slot] = null;
           this.queueRecoveryTask(target, 'destroyed', slot);
-          this.addLog(`${caster.name} が ${target.name} のパーツを破壊しました（これ以上レベルを下げられないため）`);
           this.pushSabotageEvent(`${caster.name} → ${target.name}：レベルダウンでパーツ破壊（マス${slot + 1}）`);
         }
         break;
@@ -660,7 +660,7 @@ class GameRoom {
   }
 
   resolveSabotageChoice(playerId, payload) {
-    if (this.phase !== 'sabotage') throw new Error('補助フェイズではありません');
+    if (this.phase !== 'sabotage') throw new Error('イベントフェイズではありません');
     const p = this.getPlayer(playerId);
     if (!p) throw new Error('プレイヤーが見つかりません');
     payload = payload || {};
@@ -678,7 +678,6 @@ class GameRoom {
       if (!Number.isInteger(slot) || slot < 0 || slot >= p.rail.length || !p.rail[slot]) throw new Error('マスの指定が不正です');
       p.rail[slot] = null;
       this.queueRecoveryTask(p, 'destroyed', slot);
-      this.addLog(`${p.name} のパーツが破壊されました（${choice.casterName} の効果）`);
       this.pushSabotageEvent(`${choice.casterName} → ${p.name}：パーツ破壊（マス${slot + 1}）`);
     }
 
@@ -702,7 +701,7 @@ class GameRoom {
         this.afterSabotageAndRecoveryComplete();
       }
     } else {
-      this.addLog(`${this.currentSabotagePlayer().name} の補助ターンです`);
+      this.addLog(`▶ ${this.currentSabotagePlayer().name} のイベントターンです（${this.sabotageTurnIndex + 1}人目／全${this.sabotageOrder.length}人）`);
     }
   }
 
@@ -710,7 +709,7 @@ class GameRoom {
   startRecoveryPhase() {
     this.phase = 'recovery';
     this.recoveryTurnIndex = 0;
-    this.addLog('補助フェイズ終了。復旧フェイズに入ります');
+    this.addLog('イベントフェイズ終了。復旧フェイズに入ります');
     this.advanceToNextRecoveryPlayer();
   }
 
@@ -1038,7 +1037,7 @@ class GameRoom {
     for (let i = 0; i + 2 < thrillHistory.length; i++) {
       if (thrillHistory[i] < thrillHistory[i + 1] && thrillHistory[i + 1] < thrillHistory[i + 2]) has3Consecutive = true;
     }
-    const thrill4PlusCount = thrillHistory.filter((t) => t >= 4).length;
+    const thrill5PlusCount = thrillHistory.filter((t) => t >= 5).length;
     const allThrillAtMost2 = thrillHistory.length > 0 && thrillHistory.every((t) => t <= 2);
 
     for (const cust of customers) {
@@ -1066,8 +1065,9 @@ class GameRoom {
           bonus = tunnelCount * 4;
           break;
         case 'thrillSeeker':
-          achieved = thrill4PlusCount >= 3;
-          bonus = achieved ? 12 : 0;
+          // スリル値５のマスを1回以上通過するとボーナス満足度50
+          achieved = thrill5PlusCount >= 1;
+          bonus = achieved ? 50 : 0;
           break;
       }
       skills.push({ customerId: cust.id, name: cust.name, typeKey: cust.typeKey, achieved, bonus });
@@ -1170,9 +1170,9 @@ class GameRoom {
       activeRecords: this.activeRecords,
       recordResults: this.recordResults,
       sabotageTurnPlayerId: this.phase === 'sabotage' && this.currentSabotagePlayer() ? this.currentSabotagePlayer().id : null,
-      // 補助フェイズの実行順（レール配置位置の合計値が小さい人から）を画面に明記するために送る
+      // イベントフェイズの実行順（レール配置位置の合計値が小さい人から）を画面に明記するために送る
       sabotageEvents: this.sabotageEvents,
-      sabotageOrder: this.phase === 'sabotage'
+      sabotageOrder: (this.phase === 'sabotage' || this.phase === 'recovery')
         ? this.sabotageOrder.map((id, i) => {
             const pl = this.getPlayer(id);
             return { playerId: id, name: pl ? pl.name : '', positionSum: pl ? this.railPositionSum(pl) : 0, index: i, done: pl ? pl.sabotageSubmitted : false };

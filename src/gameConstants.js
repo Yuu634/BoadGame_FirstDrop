@@ -43,7 +43,7 @@ const CUSTOMER_TYPES = [
   { key: 'schoolTrip', name: '修学旅行生', durability: 3, skillDesc: 'スリル値が3マス連続で上昇 → +10', skillPoints: 10 },
   { key: 'streamer', name: '動画配信者', durability: 3, skillDesc: '最終マスが最大スリル値 → +12', skillPoints: 12 },
   { key: 'couple', name: 'カップル', durability: 4, skillDesc: '+4×(トンネル枚数)', skillPoints: 4 },
-  { key: 'thrillSeeker', name: '絶叫マニア', durability: 5, skillDesc: 'スリル4以上のマスを3回通過 → +12', skillPoints: 12 },
+  { key: 'thrillSeeker', name: '絶叫マニア', durability: 5, skillDesc: 'スリル値５のマスを1回以上通過 → +50', skillPoints: 50 },
 ];
 
 const RAIL_SIZE = 8;
