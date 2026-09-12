@@ -260,8 +260,14 @@ section h2, section h3 { margin: 0 0 8px; }
 
 .rail-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
 .rail { display: flex; gap: 4px; flex-wrap: wrap; }
-/* レール設置枚数16の時は1行目に0(スタート)〜8、2行目に9〜16を並べ、マス1とマス9の横軸（列）を揃える */
-.rail.rail-grid-16 { display: grid; grid-template-columns: repeat(9, auto); }
+/* 各プレイヤーのジェットコースターボードは横2列固定で、縦に揃うように並べる。スタートマスは2列ぶち抜きで先頭に置く */
+.rail.rail-2col {
+  display: grid;
+  grid-template-columns: repeat(2, 66px);
+  justify-content: start;
+  gap: 4px;
+}
+.rail.rail-2col .start-slot { grid-column: 1 / -1; width: auto; min-height: 44px; }
 .start-slot { border-style: dashed; border-color: var(--accent2); background: #0e1e2c; }
 .start-slot .slot-info { color: var(--accent2); }
 .rail-total {

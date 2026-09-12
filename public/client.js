@@ -361,10 +361,11 @@ function render() {
       resultAnim.running = true;
       runResultAnimation(s);
     }
-    const showPlayAgain = !!(resultAnim && resultAnim.done);
+    // 「次のゲームへ」は結果発表アニメーションの終了を待たず、
+    // 結果画面に入った時点でホストに常に表示する（長いアニメーションを飛ばして次へ行けるように）
     const isHost = s.hostId === s.myId;
-    el('playAgainBtn').classList.toggle('hidden', !(showPlayAgain && isHost));
-    el('playAgainHint').classList.toggle('hidden', !(showPlayAgain && !isHost));
+    el('playAgainBtn').classList.toggle('hidden', !isHost);
+    el('playAgainHint').classList.toggle('hidden', isHost);
   } else {
     resultAnim = null;
     el('playAgainBtn').classList.add('hidden');
@@ -417,13 +418,15 @@ function renderCustomers(s) {
       <div class="skill">${CUSTOMER_SKILLS[c.typeKey] || c.skillDesc || ''}</div>`;
     bar.appendChild(div);
   });
-  if (s.revealedCustomers.length < 4) {
+  // 客層はプレイヤーごとに別々に配られるため、残り人数は「全ラウンド数 − 自分が今持っている人数」で数える
+  const totalCustomers = s.rounds || 4;
+  if (myCustomers.length < totalCustomers) {
     const div = document.createElement('div');
     div.className = 'customer-card';
-    div.innerHTML = `<span class="hint">残り${4 - s.revealedCustomers.length}人は未公開</span>`;
+    div.innerHTML = `<span class="hint">残り${totalCustomers - myCustomers.length}人は未公開</span>`;
     bar.appendChild(div);
   }
-  if (me && me.bannedCustomerTypes && me.bannedCustomerTypes.length && myCustomers.length < s.revealedCustomers.length) {
+  if (me && me.bannedCustomerTypes && me.bannedCustomerTypes.length) {
     const div = document.createElement('div');
     div.className = 'customer-card';
     div.innerHTML = `<span class="hint">🚫 出禁：${me.bannedCustomerTypes.map((tk) => (CUSTOMER_TABLE_DATA.find((r) => r.typeKey === tk) || {}).name || tk).join('・')}（該当タイプは今後も公開されません）</span>`;
@@ -451,6 +454,12 @@ function cardClass(c) {
   if (c.kind === 'climb') return 'card climb';
   if (c.kind === 'drop') return 'card drop';
   return `card part thrill${c.thrill}`;
+}
+
+// このラウンドで置くべきパーツ枚数。妨害のパーツ交換・破壊で枚数がずれても
+// 「累計でラウンド数×2枚」になるようサーバーが調整した値を使う
+function requiredPlacementCount(s) {
+  return s && typeof s.myRequiredPlacementCount === 'number' ? s.myRequiredPlacementCount : 2;
 }
 
 // 各レールをクライアント側で先読みシミュレーション（配置さえ済んでいれば完全に正確な値になる）
@@ -482,11 +491,13 @@ function simulateRailPreview(rail) {
         safety = true;
       }
     } else if (type === 'loop') {
-      if (entrySpeed === 4) thrill = 4; else safety = true;
+      // ループ・サイクロン・ツイストは進入可能な速度が2種類あるため、そのどちらでも成立させる
+      // （サーバー側の判定と条件を一致させないと、有効な配置なのに赤字（安全装置作動）で表示されてしまう）
+      if (entrySpeed === 3 || entrySpeed === 4) thrill = 4; else safety = true;
     } else if (type === 'airtime') {
-      if (entrySpeed === 3) thrill = 3; else safety = true;
+      if (entrySpeed === 2 || entrySpeed === 3) thrill = 3; else safety = true;
     } else if (type === 'twist') {
-      if (entrySpeed === 2) thrill = 2; else safety = true;
+      if (entrySpeed === 1 || entrySpeed === 2) thrill = 2; else safety = true;
     } else if (type === 'curve') {
       thrill = 1;
     } else if (type === 'tunnel') {
@@ -614,14 +625,13 @@ function renderPlayersBoard(s) {
       panel.appendChild(custRow);
     }
 
-    const isGrid16 = p.rail.length > 8;
+    // ジェットコースターボードは横2列に並べ、マス1→マス2を一行目にして縦に揃えていく
     const rail = document.createElement('div');
-    rail.className = 'rail' + (isGrid16 ? ' rail-grid-16' : '');
+    rail.className = 'rail rail-2col';
 
     const startBox = document.createElement('div');
     startBox.className = 'slot start-slot';
     startBox.innerHTML = `<span class="idx">0</span><span class="slot-info">スタート</span><span class="slot-info">高2</span><span class="slot-info">速2</span>`;
-    if (isGrid16) { startBox.style.gridColumn = '1'; startBox.style.gridRow = '1'; }
     rail.appendChild(startBox);
 
     // 自分のレールは、まだ確定していない「配置予定」カードも仮に置いた状態でプレビューする
@@ -635,10 +645,6 @@ function renderPlayersBoard(s) {
     p.rail.forEach((card, slot) => {
       const div = document.createElement('div');
       div.className = 'slot' + (card ? ' filled' : '');
-      if (isGrid16) {
-        div.style.gridColumn = String(2 + (slot % 8));
-        div.style.gridRow = String(1 + Math.floor(slot / 8));
-      }
 
       const idx = document.createElement('span');
       idx.className = 'idx';
@@ -665,7 +671,7 @@ function renderPlayersBoard(s) {
         appendSlotInfoLines(div, info, '');
         appendCardLabelLines(div, pendingHere.card, { pending: true, brakeReduce: pendingHere.brakeReduce });
         div.style.borderColor = '#ffd24a';
-      } else if (isMe && s.phase === 'placement' && !p.placedThisRound && selectedCardId && pendingPlacements.length < 2) {
+      } else if (isMe && s.phase === 'placement' && !p.placedThisRound && selectedCardId && pendingPlacements.length < requiredPlacementCount(s)) {
         div.classList.add('selectable');
         div.addEventListener('click', () => placeSelectedAt(slot));
       }
@@ -779,7 +785,7 @@ function renderMyControls(s) {
 
   if (s.phase === 'placement') {
     const title = document.createElement('h3');
-    title.textContent = 'レールに2枚配置';
+    title.textContent = `レールに${requiredPlacementCount(s)}枚配置`;
     box.appendChild(title);
 
     if (me.placedThisRound) {
@@ -790,14 +796,21 @@ function renderMyControls(s) {
     const options = allMyOptions(me);
     const usedIds = new Set(pendingPlacements.map((pp) => pp.cardId));
 
+    const needCount = requiredPlacementCount(s);
+
     const info = document.createElement('div');
     info.className = 'hint';
-    info.textContent = 'カードを選んでから、上のレールで空きマスをクリックして配置してください。';
+    if (needCount === 0) {
+      // 妨害のパーツ交換などで、すでにラウンド数×2枚に達している場合
+      info.textContent = `すでに設置枚数（${s.requiredPlacedTotal}枚）に達しているため、今回は配置する必要がありません。「配置を確定」を押してください。`;
+    } else {
+      info.textContent = `カードを選んでから、上のレールで空きマスをクリックして配置してください（このラウンド終了時に合計${s.requiredPlacedTotal}枚になります）。`;
+    }
     box.appendChild(info);
 
     const row = document.createElement('div');
     row.className = 'card-option-grid placement-picker';
-    const canPick = pendingPlacements.length < 2;
+    const canPick = pendingPlacements.length < needCount;
     options.filter((c) => !usedIds.has(c.id)).forEach((c) => {
       const e = makeCardOptionBox(c, canPick, canPick ? () => {
         selectedCardId = c.id === selectedCardId ? null : c.id;
@@ -829,7 +842,7 @@ function renderMyControls(s) {
       box.appendChild(warn);
     }
 
-    if (pendingPlacements.length === 2) {
+    if (pendingPlacements.length === needCount) {
       const confirmBtn = document.createElement('button');
       confirmBtn.className = 'primary';
       confirmBtn.textContent = '配置を確定';

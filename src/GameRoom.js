@@ -177,18 +177,19 @@ class GameRoom {
       p.placedThisRound = false;
       p.hand = [];
     }
-    // ① 客層公開（「客層出禁」の効果を受けているプレイヤーには、そのタイプの客層は公開されない＝その回はスキップ）
-    const cust = this.customerDeck.shift();
-    cust.satisfaction = 0;
-    cust.everReset = false;
-    this.revealedCustomers.push(cust);
-    this.addLog(`ラウンド${this.round}：客層「${cust.name}」(スリル耐性${cust.durability}) が公開されました`);
+    // ① 客層配布：全プレイヤー共通の1人ではなく、プレイヤーごとに別々の客層を配る。
+    // （「客層出禁」の効果を受けているタイプはそのプレイヤーには配られず、その回はスキップされる）
     for (const p of this.players) {
-      if (p.bannedCustomerTypes.has(cust.typeKey)) {
-        this.addLog(`${p.name} は客層「${cust.name}」が出禁のため、今回は公開されません`);
+      const cust = this.drawCustomerFor(p);
+      if (!cust) {
+        this.addLog(`${p.name} は出禁のため、今回は客層が配られませんでした`);
         continue;
       }
-      p.customers.push({ ...cust });
+      cust.satisfaction = 0;
+      cust.everReset = false;
+      this.revealedCustomers.push(cust);
+      p.customers.push(cust);
+      this.addLog(`ラウンド${this.round}：${p.name} に客層「${cust.name}」(スリル耐性${cust.durability}) が配られました`);
     }
 
     // ドラフト開始：各3枚配布（巻上・落下も一般パーツと同じ山札から出てくる。同じプレイヤーの3枚内に重複が出ないようにする）
@@ -295,12 +296,31 @@ class GameRoom {
     return null;
   }
 
+  // そのラウンド終了時にレール上にあるべきパーツの総数（ラウンド数×2枚）。
+  // 「毎ラウンド2枚置く」ではなく「累計でラウンド数×2枚になるまで置く」とすることで、
+  // 妨害のパーツ破壊・交換で枚数がずれても、全員の設置枚数が揃うようにする。
+  requiredPlacedTotal() {
+    return Math.min(this.round * 2, this.settings.railSize);
+  }
+
+  // このラウンドでそのプレイヤーが実際に置くべき枚数。
+  // 既にレールにある枚数と、手札の枚数の小さい方で頭打ちする。
+  requiredPlacementCount(p) {
+    const alreadyPlaced = p.rail.filter((c) => c).length;
+    const need = Math.max(0, this.requiredPlacedTotal() - alreadyPlaced);
+    const emptySlots = p.rail.filter((c) => !c).length;
+    return Math.min(need, p.hand.length, emptySlots);
+  }
+
   handleSubmitPlacement(playerId, placements) {
     if (this.phase !== 'placement') throw new Error('配置フェイズではありません');
     const p = this.getPlayer(playerId);
     if (!p) throw new Error('プレイヤーが見つかりません');
     if (p.placedThisRound) throw new Error('すでに配置済みです');
-    if (!Array.isArray(placements) || placements.length !== 2) throw new Error('2枚配置してください');
+    const required = this.requiredPlacementCount(p);
+    if (!Array.isArray(placements) || placements.length !== required) {
+      throw new Error(`${required}枚配置してください`);
+    }
 
     const options = this.playerOptions(p);
     const usedSlots = new Set();
@@ -308,7 +328,7 @@ class GameRoom {
     for (const pl of placements) {
       const card = options.find((c) => c.id === pl.cardId);
       if (!card) throw new Error('手元にないカードです');
-      if (usedSlots.has(pl.slot)) throw new Error('同じマスに2枚は置けません');
+      if (usedSlots.has(pl.slot)) throw new Error('同じマスに複数枚は置けません');
       const err = this.validatePlacement(p, card, pl.slot, chosenCards);
       if (err) throw new Error(err);
       if (card.kind === 'part' && card.type === 'brake') {
@@ -370,8 +390,43 @@ class GameRoom {
 
   drawGeneralCards(n) {
     const out = [];
-    for (let i = 0; i < n && this.generalDeck.length; i++) out.push(this.generalDeck.shift());
+    for (let i = 0; i < n; i++) {
+      // 山札が尽きたら新しい山札を継ぎ足す。
+      // （尽きたままだと復旧フェイズで引けるカードが0枚になり、
+      //   破壊されたマスを埋め直せず、そのプレイヤーだけ設置枚数が減ってしまう）
+      if (!this.generalDeck.length) {
+        this.generalDeck = C.shuffle(C.buildGeneralDeck().concat(C.buildClimbDeck(), C.buildDropDeck()));
+      }
+      out.push(this.generalDeck.shift());
+    }
     return out;
+  }
+
+  // 各プレイヤーに個別の客層を配る。山札が尽きたら新しい山札を継ぎ足す。
+  // 出禁タイプは山札の底に戻して飛ばし、引けるカードがなければ null を返す（その回はスキップ）。
+  drawCustomerFor(player) {
+    const skipped = [];
+    let found = null;
+    // 出禁でないカードを探す。山札1周分見ても見つからなければ諦める。
+    let guard = 0;
+    while (guard < 200) {
+      if (!this.customerDeck.length) {
+        // プレイヤー人数×ラウンド数分を配るため、基本の12枚では足りなくなる。尽きたら継ぎ足す。
+        this.customerDeck = C.buildCustomerDeck();
+      }
+      const card = this.customerDeck.shift();
+      if (player.bannedCustomerTypes.has(card.typeKey)) {
+        skipped.push(card);
+        guard++;
+        // 出禁タイプだけになってしまった場合の無限ループ防止
+        if (skipped.length >= 24) break;
+        continue;
+      }
+      found = card;
+      break;
+    }
+    if (skipped.length) this.customerDeck.push(...skipped);
+    return found;
   }
 
   drawReplacementCustomer() {
@@ -627,6 +682,11 @@ class GameRoom {
         if (pos !== 'self' && pos !== 'before' && pos !== 'after') throw new Error('位置を指定してください（そのマス／前／後）');
         targetSlot = pos === 'self' ? task.slot : pos === 'before' ? task.slot - 1 : task.slot + 1;
         if (targetSlot < 0 || targetSlot >= p.rail.length) throw new Error('その位置にはマスがありません');
+        // パーツ交換の復旧は「入れ替え」なので、設置枚数は増やさない。
+        // 空きマスに置く場合は、交換されたマスのカードをそこへ移す形にして総数を維持する。
+        if (targetSlot !== task.slot && !p.rail[targetSlot]) {
+          p.rail[task.slot] = null;
+        }
       }
       if (card.kind === 'part' && card.type === 'brake') {
         const raw = Number(payload.brakeReduce);
@@ -964,6 +1024,9 @@ class GameRoom {
       customerDeckCount: this.customerDeck.length,
       generalDeckCount: this.generalDeck.length,
       myDraftPacket: me ? me.draftPacket : [],
+      // 配置フェイズで自分が今回置くべき枚数（ラウンド数×2枚になるよう調整される）
+      myRequiredPlacementCount: me && this.phase === 'placement' ? this.requiredPlacementCount(me) : 0,
+      requiredPlacedTotal: this.phase === 'lobby' ? 0 : this.requiredPlacedTotal(),
       myId: playerId,
       log: this.log.slice(-50),
       winners: this.winners || null,
