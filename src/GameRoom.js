@@ -1033,11 +1033,16 @@ class GameRoom {
     const skills = [];
     let skillTotal = 0;
     const maxThrill = thrillHistory.length ? Math.max(...thrillHistory) : 0;
+    // 修学旅行生：スリル値2以上のマスが3マス連続しているか
     let has3Consecutive = false;
     for (let i = 0; i + 2 < thrillHistory.length; i++) {
-      if (thrillHistory[i] < thrillHistory[i + 1] && thrillHistory[i + 1] < thrillHistory[i + 2]) has3Consecutive = true;
+      if (thrillHistory[i] >= 2 && thrillHistory[i + 1] >= 2 && thrillHistory[i + 2] >= 2) has3Consecutive = true;
     }
     const thrill5PlusCount = thrillHistory.filter((t) => t >= 5).length;
+    // 動画配信者：最終マス（レール8マス設定なら8マス目）のスリル値。
+    // thrillHistory は安全装置が作動するとそこで記録が止まるため、
+    // 最後まで走り切った場合だけ最終マスの値が入っている。途中で止まった場合は未達成とする。
+    const lastSlotThrill = thrillHistory.length === railSize ? thrillHistory[railSize - 1] : null;
     const allThrillAtMost2 = thrillHistory.length > 0 && thrillHistory.every((t) => t <= 2);
 
     for (const cust of customers) {
@@ -1046,23 +1051,25 @@ class GameRoom {
       switch (cust.typeKey) {
         case 'elder':
           achieved = allThrillAtMost2;
-          bonus = achieved ? 15 : 0;
+          bonus = achieved ? 10 : 0;
           break;
         case 'family':
           achieved = partTypesSeen.size >= 5;
-          bonus = achieved ? 10 : 0;
+          bonus = achieved ? 15 : 0;
           break;
         case 'schoolTrip':
           achieved = has3Consecutive;
           bonus = achieved ? 10 : 0;
           break;
         case 'streamer':
-          achieved = thrillHistory.length > 0 && thrillHistory[thrillHistory.length - 1] === maxThrill;
-          bonus = achieved ? 12 : 0;
+          // 最終マス（8マス設定なら8マス目）のスリル値が最大スリル値と同じなら達成。
+          // 「最大は同じ値を含む」ため、同率最大でも達成となる。
+          achieved = lastSlotThrill !== null && lastSlotThrill === maxThrill;
+          bonus = achieved ? 10 : 0;
           break;
         case 'couple':
           achieved = tunnelCount > 0;
-          bonus = tunnelCount * 4;
+          bonus = tunnelCount * 10;
           break;
         case 'thrillSeeker':
           // スリル値５のマスを1回以上通過するとボーナス満足度50

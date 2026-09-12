@@ -3,11 +3,11 @@
 const socket = io();
 
 const CUSTOMER_SKILLS = {
-  elder: '全レールにおいてスリル値2以下 → +15',
-  family: '異なるパーツ種類を5種類以上通過 → +10',
-  schoolTrip: 'スリル値が3マス連続で上昇 → +10',
-  streamer: '最終マスが最大スリル値 → +12',
-  couple: 'トンネル通過ごとに → +4×(トンネル枚数)',
+  elder: '全レールにおいてスリル値2以下 → +10',
+  family: '異なるパーツ種類を5種類以上通過 → +15',
+  schoolTrip: 'スリル値2以上が3マス連続 → +10',
+  streamer: '8マス目が最大スリル値（同率含む） → +10',
+  couple: 'トンネル通過ごとに → +10×(トンネル枚数)',
   thrillSeeker: 'スリル値５のマスを1回以上通過 → +50',
 };
 
@@ -483,6 +483,993 @@ function showNextSabotageToast() {
   sabotageToastTimer = setTimeout(showNextSabotageToast, 3500);
 }
 
+// 客層は補助（交換・出禁）によりプレイヤーごとに内容が変わっていくため、ここには
+// 「全員共通の公開履歴」ではなく「自分が現在持っている客層」を表示する
+function renderCustomers(s) {
+  const bar = el('customerBar');
+  bar.innerHTML = '';
+  const me = s.players.find((p) => p.id === s.myId);
+  const myCustomers = (me && me.customers) || [];
+
+  const title = document.createElement('h3');
+  title.className = 'customer-bar-title';
+  title.textContent = '🙋 あなたの客層';
+  bar.appendChild(title);
+
+  myCustomers.forEach((c, i) => {
+    const div = document.createElement('div');
+    div.className = 'customer-card';
+    div.innerHTML = `<span class="customer-icon">${customerIcon(c.typeKey)}</span>
+      <b>客${i + 1}：${c.name}</b><br><span class="dur">スリル耐性 ${c.durability}</span>
+      <div class="skill">${CUSTOMER_SKILLS[c.typeKey] || c.skillDesc || ''}</div>`;
+    bar.appendChild(div);
+  });
+  // 客層はプレイヤーごとに別々に配られるため、残り人数は「全ラウンド数 − 自分が今持っている人数」で数える
+  const totalCustomers = s.rounds || 4;
+  if (myCustomers.length < totalCustomers) {
+    const div = document.createElement('div');
+    div.className = 'customer-card';
+    div.innerHTML = `<span class="hint">残り${totalCustomers - myCustomers.length}人は未公開</span>`;
+    bar.appendChild(div);
+  }
+  if (me && me.bannedCustomerTypes && me.bannedCustomerTypes.length) {
+    const div = document.createElement('div');
+    div.className = 'customer-card';
+    div.innerHTML = `<span class="hint">🚫 出禁：${me.bannedCustomerTypes.map((tk) => (CUSTOMER_TABLE_DATA.find((r) => r.typeKey === tk) || {}).name || tk).join('・')}（該当タイプは今後も公開されません）</span>`;
+    bar.appendChild(div);
+  }
+}
+
+function cardLabel(c) {
+  if (!c) return '';
+  return c.label;
+}
+// ブレーキは「何だけ速度を下げたか」をラベルに直接表記する
+function cardLabelWithBrake(c, brakeReduce) {
+  const base = cardLabel(c);
+  if (!c) return base;
+  const reduce = brakeReduce !== undefined ? brakeReduce : c.brakeReduce;
+  if (c.kind === 'part' && c.type === 'brake' && reduce !== undefined) {
+    return `${base}(速度-${reduce})`;
+  }
+  return base;
+}
+
+function cardClass(c) {
+  if (!c) return '';
+  if (c.kind === 'climb') return 'card climb';
+  if (c.kind === 'drop') return 'card drop';
+  return `card part thrill${c.thrill}`;
+}
+
+// このラウンドで置くべきパーツ枚数。補助のパーツ交換・破壊で枚数がずれても
+// 「累計でラウンド数×2枚」になるようサーバーが調整した値を使う
+function requiredPlacementCount(s) {
+  return s && typeof s.myRequiredPlacementCount === 'number' ? s.myRequiredPlacementCount : 2;
+}
+
+// 各レールをクライアント側で先読みシミュレーション（配置さえ済んでいれば完全に正確な値になる）
+function simulateRailPreview(rail) {
+  let altitude = 2;
+  let speed = 2;
+  const out = [];
+  for (let i = 0; i < rail.length; i++) {
+    const card = rail[i];
+    if (!card) { out.push(null); continue; }
+    const isClimb = card.kind === 'climb';
+    const isDrop = card.kind === 'drop';
+    const type = isClimb ? 'climb' : isDrop ? 'drop' : card.type;
+    const isBrake = type === 'brake';
+    const entrySpeed = speed;
+    if (!isClimb && !isDrop && !isBrake) speed = Math.max(0, speed - 1);
+    let thrill = 0;
+    let safety = false;
+    if (isClimb) {
+      altitude += card.value;
+      speed = 0;
+      thrill = 0;
+    } else if (isDrop) {
+      if (altitude >= card.value) {
+        altitude -= card.value;
+        speed += card.value;
+        thrill = card.value;
+      } else {
+        safety = true;
+      }
+    } else if (type === 'loop') {
+      // ループ・サイクロン・ツイストは進入可能な速度が2種類あるため、そのどちらでも成立させる
+      // （サーバー側の判定と条件を一致させないと、有効な配置なのに赤字（安全装置作動）で表示されてしまう）
+      if (entrySpeed === 3 || entrySpeed === 4) thrill = 4; else safety = true;
+    } else if (type === 'airtime') {
+      if (entrySpeed === 2 || entrySpeed === 3) thrill = 3; else safety = true;
+    } else if (type === 'twist') {
+      if (entrySpeed === 1 || entrySpeed === 2) thrill = 2; else safety = true;
+    } else if (type === 'curve') {
+      thrill = 1;
+    } else if (type === 'tunnel') {
+      thrill = entrySpeed;
+    } else if (type === 'brake') {
+      const desired = Number.isFinite(card.brakeReduce) ? card.brakeReduce : 0;
+      const actualReduce = Math.max(0, Math.min(entrySpeed, desired));
+      thrill = actualReduce;
+      speed = entrySpeed - actualReduce;
+    }
+    if (safety) { thrill = 0; speed = 0; }
+    out.push({ altitude, speed, thrill, safety, estimated: false });
+  }
+  return out;
+}
+
+function trialDataFor(playerId, slot) {
+  for (let i = trialLines.length - 1; i >= 0; i--) {
+    const d = trialLines[i];
+    if (d.playerId === playerId && d.slot === slot) return d;
+  }
+  return null;
+}
+
+// 結果発表アニメーション中、そのプレイヤー・そのマスの得点がすでに公開済みかどうかを返す（未公開ならnull）
+function revealedScoreFor(s, playerId, slot) {
+  if (s.phase !== 'finished' || !resultAnim) return null;
+  const idx = s.trialResults.findIndex((r) => r.playerId === playerId);
+  if (idx === -1) return null;
+  const r = s.trialResults[idx];
+  const h = r.history[slot];
+  if (!h || !h.cardLabel) return null;
+  if (resultAnim.done) return h.totalDelta;
+  if (idx < resultAnim.currentIndex) return h.totalDelta;
+  if (idx === resultAnim.currentIndex && slot <= resultAnim.step) return h.totalDelta;
+  return null;
+}
+
+// 高度・速度・スリル値を1つずつ改行して表示する（レールボックスを縦長・省幅にするため）
+function appendSlotInfoLines(div, info, suffix) {
+  if (!info) return;
+  const rows = [
+    `高${info.altitude}`,
+    `速${info.speed}`,
+    `スリル${info.thrill}${suffix || ''}`,
+  ];
+  rows.forEach((text) => {
+    const line = document.createElement('span');
+    line.className = 'slot-info' + (info.safety ? ' slot-info-safety' : '');
+    line.textContent = text;
+    div.appendChild(line);
+  });
+}
+
+// レールボックス内のカード名を、適切な位置で改行して表示する。
+// 配置予定なら「予定」→カード名、ブレーキなら「ブレーキ」→「(速度-N)」を別行にする。
+function appendCardLabelLines(div, c, opts) {
+  opts = opts || {};
+  const reduce = opts.brakeReduce !== undefined ? opts.brakeReduce : (c && c.brakeReduce);
+  const isBrake = c && c.kind === 'part' && c.type === 'brake';
+  const lines = [];
+  if (opts.pending) lines.push('予定');
+  lines.push(`${partIcon(c, 'part-icon-img slot-icon-img')} ${cardLabel(c)}`);
+  if (isBrake && reduce !== undefined) lines.push(`(速度-${reduce})`);
+  lines.forEach((html) => {
+    const line = document.createElement('span');
+    line.className = 'slot-label';
+    line.innerHTML = html;
+    div.appendChild(line);
+  });
+}
+
+// 自分を「下」、他プレイヤーを「上・左・右」に割り当てて、テーブルを囲むような配置にする
+// 自分のプレイヤーを一番上にし、全プレイヤーを一列縦に並べる順番を返す。
+// （自分の次からは席順をそのまま使うので、誰が次の手番かが分かりやすい）
+function orderedPlayersForBoard(s) {
+  const meIndex = s.players.findIndex((p) => p.id === s.myId);
+  if (meIndex === -1) return s.players.slice();
+  const out = [];
+  for (let i = 0; i < s.players.length; i++) {
+    out.push(s.players[(meIndex + i) % s.players.length]);
+  }
+  return out;
+}
+
+function renderPlayersBoard(s) {
+  const board = el('playersBoard');
+  board.innerHTML = '';
+  orderedPlayersForBoard(s).forEach((p) => {
+    const isMe = p.id === s.myId;
+    const panel = document.createElement('div');
+    panel.className = 'player-panel' + (isMe ? ' me' : '');
+
+    const head = document.createElement('div');
+    head.className = 'player-head';
+    head.innerHTML = `<span class="name">${p.name}${isMe ? '（あなた）' : ''}${p.id === s.hostId ? ' 👑' : ''}</span>
+      ${p.connected ? '' : '<span class="tag">切断中</span>'}
+      ${s.phase === 'placement' ? `<span class="tag">${p.placedThisRound ? '配置済み' : '配置待ち'}</span>` : ''}
+      ${s.phase === 'draft' ? `<span class="tag">${p.hasPendingPick ? '選択済み' : '選択待ち'}</span>` : ''}
+      ${s.phase === 'sabotage' ? `<span class="tag">${p.pendingSabotageChoices && p.pendingSabotageChoices.length ? '対応待ち' : (p.sabotageSubmitted ? '提出済み' : (p.id === s.sabotageTurnPlayerId ? '🎯手番' : '待機中'))}</span>` : ''}
+      ${s.phase === 'recovery' ? `<span class="tag">${p.recoveryTasks && p.recoveryTasks.length ? (p.id === s.recoveryTurnPlayerId ? '🎯復旧中' : '復旧待ち') : '完了'}</span>` : ''}`;
+    panel.appendChild(head);
+
+    if (p.customers && p.customers.length) {
+      const custRow = document.createElement('div');
+      custRow.className = 'player-customers';
+      p.customers.forEach((c) => {
+        const chip = document.createElement('span');
+        chip.className = 'player-customer-chip';
+        chip.title = `${c.name}（スリル耐性${c.durability}）`;
+        chip.innerHTML = `${customerIcon(c.typeKey, 'customer-icon-img small')}${c.name}`;
+        custRow.appendChild(chip);
+      });
+      if (p.bannedCustomerTypes && p.bannedCustomerTypes.length) {
+        const banChip = document.createElement('span');
+        banChip.className = 'player-customer-chip banned';
+        banChip.textContent = `🚫出禁：${p.bannedCustomerTypes.map((tk) => (CUSTOMER_TABLE_DATA.find((r) => r.typeKey === tk) || {}).name || tk).join('・')}`;
+        custRow.appendChild(banChip);
+      }
+      panel.appendChild(custRow);
+    }
+
+    // ジェットコースターマップ：スタートマスを左端に置き、その右側に
+    // 8レールなら縦2マス×挑4マス、16レールなら縦2マス×挑8マスとなるように並べる
+    const cols = Math.max(1, Math.ceil(p.rail.length / 2));
+    const rail = document.createElement('div');
+    rail.className = 'rail rail-map';
+    // 左端のスタート列 + マップ本体の列数
+    rail.style.gridTemplateColumns = `auto repeat(${cols}, 66px)`;
+
+    const startBox = document.createElement('div');
+    startBox.className = 'slot start-slot';
+    // スタートマスは左端で1列目・縦2行分をぶち抜きで使う
+    startBox.style.gridColumn = '1';
+    startBox.style.gridRow = '1 / span 2';
+    startBox.innerHTML = `<span class="idx">0</span><span class="slot-info">スタート</span><span class="slot-info">高2</span><span class="slot-info">速2</span>`;
+    rail.appendChild(startBox);
+
+    // 自分のレールは、まだ確定していない「配置予定」カードも仮に置いた状態でプレビューする
+    const virtualRail = isMe && pendingPlacements.length
+      ? p.rail.map((c, i) => {
+          const pend = pendingPlacements.find((pp) => pp.slot === i);
+          return pend ? { ...pend.card, brakeReduce: pend.brakeReduce } : c;
+        })
+      : p.rail;
+    const preview = simulateRailPreview(virtualRail);
+    p.rail.forEach((card, slot) => {
+      const div = document.createElement('div');
+      div.className = 'slot' + (card ? ' filled' : '');
+      // マス1から横に並べ、列数を超えたら下の行へ折り返す
+      div.style.gridColumn = String(2 + (slot % cols));
+      div.style.gridRow = String(1 + Math.floor(slot / cols));
+
+      const idx = document.createElement('span');
+      idx.className = 'idx';
+      idx.textContent = String(slot + 1);
+      div.appendChild(idx);
+
+      const pendingHere = isMe && pendingPlacements.find((pp) => pp.slot === slot);
+      if (card) {
+        const live = (s.phase === 'trial' || s.phase === 'finished') ? trialDataFor(p.id, slot) : null;
+        const info = live || preview[slot];
+        appendSlotInfoLines(div, info, !live && info && info.estimated ? '?' : '');
+        appendCardLabelLines(div, card);
+        div.title = cardTooltip(card);
+
+        const scoreVal = revealedScoreFor(s, p.id, slot);
+        if (scoreVal !== null) {
+          const scoreSpan = document.createElement('span');
+          scoreSpan.className = 'slot-score' + (scoreVal > 0 ? ' plus' : scoreVal < 0 ? ' minus' : ' zero');
+          scoreSpan.textContent = `${scoreVal >= 0 ? '+' : ''}${scoreVal}`;
+          div.appendChild(scoreSpan);
+        }
+      } else if (pendingHere) {
+        const info = preview[slot];
+        appendSlotInfoLines(div, info, '');
+        appendCardLabelLines(div, pendingHere.card, { pending: true, brakeReduce: pendingHere.brakeReduce });
+        div.style.borderColor = '#ffd24a';
+      } else if (isMe && s.phase === 'placement' && !p.placedThisRound && selectedCardId && pendingPlacements.length < requiredPlacementCount(s)) {
+        div.classList.add('selectable');
+        div.addEventListener('click', () => placeSelectedAt(slot));
+      }
+      rail.appendChild(div);
+    });
+
+    const railRow = document.createElement('div');
+    railRow.className = 'rail-row';
+    railRow.appendChild(rail);
+
+    if (s.phase === 'finished' && resultAnim) {
+      const totalBox = document.createElement('div');
+      totalBox.className = 'rail-total';
+      const val = Math.round(resultAnim.totals[p.id] || 0);
+      totalBox.innerHTML = `<span class="rail-total-label">合計</span><span class="rail-total-val">${val}</span>`;
+      railRow.appendChild(totalBox);
+    }
+
+    // ボーナス満足度の計算結果を、マップの右側に表示する
+    if (s.phase === 'trial' || s.phase === 'finished') {
+      const bonusBox = buildRailBonusBox(s, p.id);
+      if (bonusBox) railRow.appendChild(bonusBox);
+    }
+
+    panel.appendChild(railRow);
+
+    if (p.hand.length) {
+      const row = document.createElement('div');
+      row.className = 'hand-row';
+      p.hand.forEach((c) => row.appendChild(makeCardEl(c, false)));
+      panel.appendChild(row);
+    }
+
+    board.appendChild(panel);
+  });
+}
+
+function makeCardEl(c, selectable) {
+  const d = document.createElement('div');
+  d.className = cardClass(c) + ' card-v card-v-compact' + (selectable ? ' selectable' : '');
+  if (c.id === selectedCardId) d.className += ' chosen';
+  d.title = cardTooltip(c);
+  d.appendChild(buildCardVisual(c));
+  return d;
+}
+
+function makeCardOptionBox(c, selectable, onClick) {
+  const box = document.createElement('div');
+  box.className = 'card-option card-v' + (selectable ? ' selectable' : '') + (c.id === selectedCardId ? ' chosen' : '');
+  box.appendChild(buildCardVisual(c));
+  if (selectable && onClick) box.addEventListener('click', onClick);
+  return box;
+}
+
+function placeSelectedAt(slot) {
+  const s = latestState;
+  const me = s.players.find((p) => p.id === s.myId);
+  const options = allMyOptions(me);
+  const card = options.find((c) => c.id === selectedCardId);
+  if (!card) return;
+
+  let brakeReduce;
+  if (card.kind === 'part' && card.type === 'brake') {
+    const raw = window.prompt('ブレーキ：下げる速度の値を入力してください（0以上の整数。実際の速度より大きい場合は下げられる分だけ下がります）', '0');
+    if (raw === null) return; // キャンセルされたら配置しない
+    const n = parseInt(raw, 10);
+    brakeReduce = Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+
+  pendingPlacements.push({ cardId: card.id, slot, card, brakeReduce });
+  selectedCardId = null;
+  render();
+}
+
+function allMyOptions(me) {
+  return me.hand.slice();
+}
+
+function renderMyControls(s) {
+  const box = el('myControls');
+  box.innerHTML = '';
+  const me = s.players.find((p) => p.id === s.myId);
+  if (!me) return;
+
+  if (s.phase === 'draft') {
+    const title = document.createElement('h3');
+    title.textContent = '一般パーツをドラフト';
+    box.appendChild(title);
+    if (me.hasPendingPick) {
+      const p = document.createElement('div');
+      p.className = 'hint';
+      p.textContent = '選択済みです。他のプレイヤーの選択を待っています…';
+      box.appendChild(p);
+    } else if (s.myDraftPacket.length === 0) {
+      const p = document.createElement('div');
+      p.className = 'hint';
+      p.textContent = '受け取るカードを待っています…';
+      box.appendChild(p);
+    } else {
+      const info = document.createElement('div');
+      info.textContent = '1枚選んでください：';
+      box.appendChild(info);
+      const row = document.createElement('div');
+      row.className = 'card-option-grid';
+      s.myDraftPacket.forEach((c) => {
+        const e = makeCardOptionBox(c, true, () => {
+          socket.emit('draftPick', { cardId: c.id }, (res) => {
+            if (!res.ok) alert(res.error);
+          });
+        });
+        row.appendChild(e);
+      });
+      box.appendChild(row);
+    }
+    return;
+  }
+
+  if (s.phase === 'placement') {
+    const title = document.createElement('h3');
+    title.textContent = `レールに${requiredPlacementCount(s)}枚配置`;
+    box.appendChild(title);
+
+    if (me.placedThisRound) {
+      box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '配置済みです。他のプレイヤーを待っています…' }));
+      return;
+    }
+
+    const options = allMyOptions(me);
+    const usedIds = new Set(pendingPlacements.map((pp) => pp.cardId));
+
+    const needCount = requiredPlacementCount(s);
+
+    const info = document.createElement('div');
+    info.className = 'hint';
+    if (needCount === 0) {
+      // 補助のパーツ交換などで、すでにラウンド数×2枚に達している場合
+      info.textContent = `すでに設置枚数（${s.requiredPlacedTotal}枚）に達しているため、今回は配置する必要がありません。「配置を確定」を押してください。`;
+    } else {
+      info.textContent = `カードを選んでから、上のレールで空きマスをクリックして配置してください（このラウンド終了時に合計${s.requiredPlacedTotal}枚になります）。`;
+    }
+    box.appendChild(info);
+
+    const row = document.createElement('div');
+    row.className = 'card-option-grid placement-picker';
+    const canPick = pendingPlacements.length < needCount;
+    options.filter((c) => !usedIds.has(c.id)).forEach((c) => {
+      const e = makeCardOptionBox(c, canPick, canPick ? () => {
+        selectedCardId = c.id === selectedCardId ? null : c.id;
+        render();
+      } : null);
+      row.appendChild(e);
+    });
+    box.appendChild(row);
+
+    if (pendingPlacements.length) {
+      const list = document.createElement('div');
+      list.className = 'hint';
+      list.innerHTML = '配置予定：' + pendingPlacements.map((pp) => `${partIcon(pp.card, 'part-icon-img small')}${cardLabelWithBrake(pp.card, pp.brakeReduce)}→マス${pp.slot + 1}`).join('、');
+      box.appendChild(list);
+      const undoBtn = document.createElement('button');
+      undoBtn.textContent = '配置予定を取り消す';
+      undoBtn.addEventListener('click', () => {
+        pendingPlacements.pop();
+        render();
+      });
+      box.appendChild(undoBtn);
+    }
+
+    const leftoverCount = options.length - pendingPlacements.length;
+    if (leftoverCount > 0) {
+      const warn = document.createElement('div');
+      warn.className = 'hint';
+      warn.textContent = `※ 配置しなかったカード（残り${leftoverCount}枚見込み）は次のラウンドに持ち越せません。ラウンド終了時にすべて捨札になります。`;
+      box.appendChild(warn);
+    }
+
+    if (pendingPlacements.length === needCount) {
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'primary';
+      confirmBtn.textContent = '配置を確定';
+      confirmBtn.addEventListener('click', () => {
+        socket.emit('submitPlacement', {
+          placements: pendingPlacements.map((pp) => ({ cardId: pp.cardId, slot: pp.slot, brakeReduce: pp.brakeReduce })),
+        }, (res) => {
+          if (!res.ok) return alert(res.error);
+          pendingPlacements = [];
+          selectedCardId = null;
+        });
+      });
+      box.appendChild(confirmBtn);
+    }
+    return;
+  }
+
+  if (s.phase === 'sabotage') {
+    renderSabotagePhase(s, me, box);
+    return;
+  }
+
+  if (s.phase === 'recovery') {
+    renderRecoveryPhase(s, me, box);
+    return;
+  }
+}
+
+function makeLabeledSelect(labelText, options, state, key, numeric) {
+  if (state[key] === undefined && options.length) state[key] = options[0].value;
+  const wrap = document.createElement('div');
+  wrap.className = 'sabotage-field';
+  const label = document.createElement('div');
+  label.className = 'hint';
+  label.textContent = labelText;
+  wrap.appendChild(label);
+  const select = document.createElement('select');
+  options.forEach((o) => {
+    const opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = o.label;
+    if (String(o.value) === String(state[key])) opt.selected = true;
+    select.appendChild(opt);
+  });
+  select.addEventListener('change', () => {
+    state[key] = numeric ? Number(select.value) : select.value;
+    render();
+  });
+  wrap.appendChild(select);
+  return wrap;
+}
+
+// ---------- イベントフェイズ ----------
+// 2枚配られた補助カードのうち、使えるのは1枚だけ。選ぶ → 効果の対象（客層・パーツ）を選ぶ、の2段階にする。
+let sabotageSelectedCardId = null;
+let sabotagePlayParams = {}; // 選択中の1枚に対する対象プレイヤー・客層・パーツなどのパラメータ
+let pendingChoiceState = {}; // choice.id -> { idx } : 他プレイヤーからの補助への対応（客層/パーツ選択）を保持
+
+// カードごとに「実際に選択可能な対象プレイヤー」だけを返す（対象がいないカードは選べないようにする）
+// 「補助カード」なので、自分自身も対象に選べる（allPlayers には自分も含む）。
+// ただし「相互交換」系は自分同士では意味がないため、他プレイヤーのみ。
+function getValidSabotageTargets(card, me, allPlayers) {
+  const others = allPlayers.filter((p) => p.id !== me.id);
+  switch (card.type) {
+    case 'custRandomSwap':
+      return allPlayers.filter((p) => p.customers && p.customers.length > 0);
+    case 'custMutualSwap':
+      if (!me.customers || me.customers.length === 0) return [];
+      return others.filter((p) => p.customers && p.customers.length > 0);
+    case 'custBanType':
+      return allPlayers;
+    case 'partDestroy':
+      return allPlayers.filter((p) => p.rail.some((c) => c));
+    case 'partSwap':
+      if (!me.rail.some((c) => c)) return [];
+      return others.filter((p) => p.rail.some((c) => c));
+    case 'partLevelDown':
+      return allPlayers.filter((p) => p.rail.some((c) => c && (c.kind === 'climb' || c.kind === 'drop')));
+    default:
+      return allPlayers;
+  }
+}
+
+function renderSabotagePhase(s, me, box) {
+  const title = document.createElement('h3');
+  title.textContent = 'イベントフェイズ（相手を補助するか、補助への対応をしてください）';
+  box.appendChild(title);
+
+  const handIds = new Set((me.sabotageHand || []).map((c) => c.id));
+  if (sabotageSelectedCardId && !handIds.has(sabotageSelectedCardId)) {
+    sabotageSelectedCardId = null;
+    sabotagePlayParams = {};
+  }
+
+  // 1. 自分が対応すべき補助（他プレイヤーから受けたカードで、自分の選択が必要なもの）
+  // 選択中の値はchoice.idごとに永続化する（renderのたびにstateを作り直すと、選び直しても
+  // 常に最初の選択肢に戻ってしまい、実質「最初のパーツしか選べない」不具合になっていた）
+  const choiceIds = new Set((me.pendingSabotageChoices || []).map((c) => c.id));
+  Object.keys(pendingChoiceState).forEach((id) => { if (!choiceIds.has(id)) delete pendingChoiceState[id]; });
+
+  (me.pendingSabotageChoices || []).forEach((choice) => {
+    if (!pendingChoiceState[choice.id]) pendingChoiceState[choice.id] = {};
+    const state = pendingChoiceState[choice.id];
+
+    const wrap = document.createElement('div');
+    wrap.className = 'sabotage-choice-box';
+    const desc = document.createElement('div');
+    desc.className = 'hint';
+    desc.textContent = `⚠ ${choice.casterName} が「${choice.cardLabel}」を使用しました。対応してください：`;
+    wrap.appendChild(desc);
+
+    if (choice.type === 'custRandomSwap') {
+      wrap.appendChild(makeLabeledSelect(
+        '入れ替える自分の客層：',
+        me.customers.map((c, i) => ({ value: i, label: `${c.name}（スリル耐性${c.durability}）` })),
+        state, 'idx', true,
+      ));
+      const btn = document.createElement('button');
+      btn.textContent = 'この客層を入れ替える';
+      btn.addEventListener('click', () => {
+        socket.emit('resolveSabotageChoice', { choiceId: choice.id, customerIndex: state.idx }, (res) => {
+          if (!res.ok) alert(res.error);
+        });
+      });
+      wrap.appendChild(btn);
+    } else if (choice.type === 'partDestroy') {
+      const filledSlots = me.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean);
+      if (filledSlots.length === 0) {
+        wrap.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（設置済みのパーツがありません）' }));
+      } else {
+        wrap.appendChild(makeLabeledSelect('破壊させる自分のパーツ：', filledSlots, state, 'idx', true));
+        const btn = document.createElement('button');
+        btn.textContent = 'このパーツを破壊させる';
+        btn.addEventListener('click', () => {
+          socket.emit('resolveSabotageChoice', { choiceId: choice.id, slot: state.idx }, (res) => {
+            if (!res.ok) alert(res.error);
+          });
+        });
+        wrap.appendChild(btn);
+      }
+    }
+    box.appendChild(wrap);
+  });
+
+  // 2. 自分の補助カードの使用（プレイヤーごとに順番に行う）
+  const turnPlayer = s.players.find((p) => p.id === s.sabotageTurnPlayerId);
+  const turnTag = document.createElement('div');
+  turnTag.className = 'hint sabotage-turn-tag';
+  turnTag.textContent = turnPlayer ? `🎯 現在のイベントターン：${turnPlayer.name}${turnPlayer.id === s.myId ? '（あなた）' : ''}` : '';
+  box.appendChild(turnTag);
+
+  if (me.sabotageSubmitted) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '補助カードは提出済みです。他のプレイヤーを待っています…' }));
+    return;
+  }
+  if (s.sabotageTurnPlayerId !== s.myId) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: `${turnPlayer ? turnPlayer.name : '他のプレイヤー'} のイベントターンです。順番をお待ちください…` }));
+    return;
+  }
+
+  // 補助カードは自分も対象にできるため、全プレイヤーを渡す
+  const allPlayers = s.players;
+  const info = document.createElement('div');
+  info.className = 'hint';
+  info.textContent = '2枚のうち、使うカードを1枚だけ選んでください（使わなくても構いません）。選ぶと効果の対象を指定できます。';
+  box.appendChild(info);
+
+  const handRow = document.createElement('div');
+  handRow.className = 'sabotage-hand';
+  (me.sabotageHand || []).forEach((card) => {
+    const validTargets = getValidSabotageTargets(card, me, allPlayers);
+    const usable = validTargets.length > 0;
+    const isSelected = sabotageSelectedCardId === card.id;
+
+    const cardBox = document.createElement('div');
+    cardBox.className = 'sabotage-card' + (isSelected ? ' active' : '') + (usable ? '' : ' disabled');
+
+    const head = document.createElement('div');
+    head.className = 'sabotage-card-head';
+    head.textContent = `[${SABOTAGE_LABELS[card.category] || ''}] ${card.label}`;
+    cardBox.appendChild(head);
+
+    const desc = document.createElement('div');
+    desc.className = 'sabotage-card-desc';
+    desc.textContent = card.desc;
+    cardBox.appendChild(desc);
+
+    if (!usable) {
+      cardBox.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '（このカードを使える対象がいません）' }));
+      handRow.appendChild(cardBox);
+      return;
+    }
+
+    const selectBtn = document.createElement('button');
+    selectBtn.textContent = isSelected ? '選択中（もう一度押すと解除）' : 'このカードを使う';
+    selectBtn.className = isSelected ? 'primary' : '';
+    selectBtn.addEventListener('click', () => {
+      sabotageSelectedCardId = isSelected ? null : card.id;
+      sabotagePlayParams = {};
+      render();
+    });
+    cardBox.appendChild(selectBtn);
+
+    if (isSelected) {
+      cardBox.appendChild(makeLabeledSelect(
+        '対象プレイヤー：',
+        validTargets.map((op) => ({ value: op.id, label: op.id === s.myId ? `${op.name}（あなた）` : op.name })),
+        sabotagePlayParams, 'targetPlayerId', false,
+      ));
+      const target = s.players.find((p) => p.id === sabotagePlayParams.targetPlayerId);
+
+      if (card.type === 'custMutualSwap') {
+        cardBox.appendChild(makeLabeledSelect('自分の客層：', me.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), sabotagePlayParams, 'myIndex', true));
+        if (target) cardBox.appendChild(makeLabeledSelect('相手の客層：', target.customers.map((c, i) => ({ value: i, label: `${c.name}（耐性${c.durability}）` })), sabotagePlayParams, 'targetIndex', true));
+      } else if (card.type === 'custBanType') {
+        const availableTypes = CUSTOMER_TABLE_DATA.filter((row) => !target || !(target.bannedCustomerTypes || []).includes(row.typeKey));
+        cardBox.appendChild(makeLabeledSelect('出禁にする客層タイプ：', availableTypes.map((row) => ({ value: row.typeKey, label: row.name })), sabotagePlayParams, 'typeKey', false));
+      } else if (card.type === 'partSwap') {
+        cardBox.appendChild(makeLabeledSelect('自分のパーツ：', me.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), sabotagePlayParams, 'mySlot', true));
+        if (target) cardBox.appendChild(makeLabeledSelect('相手のパーツ：', target.rail.map((c, i) => (c ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean), sabotagePlayParams, 'targetSlot', true));
+      } else if (card.type === 'partLevelDown') {
+        if (target) {
+          const opts = target.rail.map((c, i) => ((c && (c.kind === 'climb' || c.kind === 'drop')) ? { value: i, label: `マス${i + 1}：${cardLabel(c)}` } : null)).filter(Boolean);
+          cardBox.appendChild(makeLabeledSelect('相手の巻上/落下パーツ：', opts, sabotagePlayParams, 'targetSlot', true));
+        }
+      }
+    }
+
+    handRow.appendChild(cardBox);
+  });
+  box.appendChild(handRow);
+
+  const confirmBtn = document.createElement('button');
+  confirmBtn.className = 'primary';
+  confirmBtn.textContent = sabotageSelectedCardId ? '選んだカードを使用して確定' : '何も使わずに確定';
+  confirmBtn.addEventListener('click', () => {
+    const plays = [];
+    if (sabotageSelectedCardId) {
+      const card = (me.sabotageHand || []).find((c) => c.id === sabotageSelectedCardId);
+      if (!card) { alert('カード情報が更新されました。選び直してください'); sabotageSelectedCardId = null; render(); return; }
+      if (!sabotagePlayParams.targetPlayerId) { alert('対象プレイヤーを選んでください'); return; }
+      const play = { cardId: card.id, targetPlayerId: sabotagePlayParams.targetPlayerId };
+      if (card.type === 'custMutualSwap') {
+        if (sabotagePlayParams.myIndex === undefined || sabotagePlayParams.targetIndex === undefined) { alert('客層を選んでください'); return; }
+        play.myIndex = sabotagePlayParams.myIndex;
+        play.targetIndex = sabotagePlayParams.targetIndex;
+      } else if (card.type === 'custBanType') {
+        if (!sabotagePlayParams.typeKey) { alert('客層タイプを選んでください'); return; }
+        play.typeKey = sabotagePlayParams.typeKey;
+      } else if (card.type === 'partSwap') {
+        if (sabotagePlayParams.mySlot === undefined || sabotagePlayParams.targetSlot === undefined) { alert('パーツを選んでください'); return; }
+        play.mySlot = sabotagePlayParams.mySlot;
+        play.targetSlot = sabotagePlayParams.targetSlot;
+      } else if (card.type === 'partLevelDown') {
+        if (sabotagePlayParams.targetSlot === undefined) { alert('パーツを選んでください'); return; }
+        play.targetSlot = sabotagePlayParams.targetSlot;
+      }
+      plays.push(play);
+    }
+    socket.emit('submitSabotage', { plays }, (res) => {
+      if (!res.ok) return alert(res.error);
+      sabotageSelectedCardId = null;
+      sabotagePlayParams = {};
+    });
+  });
+  box.appendChild(confirmBtn);
+}
+
+// ---------- 復旧フェイズ ----------
+let recoveryChoiceState = {}; // taskId -> { cardId, position, brakeReduce }
+
+function renderRecoveryPhase(s, me, box) {
+  const title = document.createElement('h3');
+  title.textContent = '復旧フェイズ';
+  box.appendChild(title);
+
+  const taskIds = new Set((me.recoveryTasks || []).map((t) => t.id));
+  Object.keys(recoveryChoiceState).forEach((id) => { if (!taskIds.has(id)) delete recoveryChoiceState[id]; });
+
+  const turnPlayer = s.players.find((p) => p.id === s.recoveryTurnPlayerId);
+  const turnTag = document.createElement('div');
+  turnTag.className = 'hint sabotage-turn-tag';
+  turnTag.textContent = turnPlayer ? `🎯 現在の復旧ターン：${turnPlayer.name}${turnPlayer.id === s.myId ? '（あなた）' : ''}` : '';
+  box.appendChild(turnTag);
+
+  if (!me.recoveryTasks || me.recoveryTasks.length === 0) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '復旧の必要はありません。他のプレイヤーの復旧を待っています…' }));
+    return;
+  }
+  if (s.recoveryTurnPlayerId !== s.myId) {
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: `${turnPlayer ? turnPlayer.name : '他のプレイヤー'} の復旧ターンです。順番をお待ちください…` }));
+    return;
+  }
+
+  me.recoveryTasks.forEach((task) => {
+    if (!recoveryChoiceState[task.id]) recoveryChoiceState[task.id] = {};
+    const state = recoveryChoiceState[task.id];
+
+    const wrap = document.createElement('div');
+    wrap.className = 'recovery-task-box';
+    const label = document.createElement('div');
+    label.className = 'hint';
+    const mandatory = task.type === 'destroyed' && task.drawnCards.length > 0;
+    if (task.type === 'destroyed') {
+      label.textContent = mandatory
+        ? `マス${task.slot + 1}が破壊されました。一般パーツを${task.drawnCards.length}枚引きました。この中から1枚を選んでそのマスに設置してください（必須）：`
+        : `マス${task.slot + 1}が破壊されましたが、山札切れのため復旧できませんでした。`;
+    } else {
+      label.textContent = `マス${task.slot + 1}のパーツが交換されました。一般パーツを${task.drawnCards.length}枚引きました。そのマス、またはその前後1マスに設置できます（すでにパーツがあっても上書きされます）：`;
+    }
+    wrap.appendChild(label);
+
+    // 同じ見た目（種類・レベル）のカードが複数枚引かれても、選択肢としては1つだけ表示する
+    const seenSig = new Set();
+    const uniqueCards = task.drawnCards.filter((c) => {
+      const sig = `${c.kind}:${c.type || ''}:${c.value || ''}`;
+      if (seenSig.has(sig)) return false;
+      seenSig.add(sig);
+      return true;
+    });
+
+    const optionsRow = document.createElement('div');
+    optionsRow.className = 'card-option-grid';
+    uniqueCards.forEach((c) => {
+      const e = makeCardOptionBox(c, true, () => {
+        state.cardId = state.cardId === c.id ? null : c.id;
+        render();
+      });
+      if (c.id === state.cardId) e.classList.add('chosen');
+      optionsRow.appendChild(e);
+    });
+    wrap.appendChild(optionsRow);
+
+    if (state.cardId) {
+      const card = task.drawnCards.find((c) => c.id === state.cardId);
+      if (task.type === 'swapped') {
+        const selfOk = task.slot >= 0 && task.slot < me.rail.length;
+        const beforeOk = task.slot - 1 >= 0;
+        const afterOk = task.slot + 1 < me.rail.length;
+        const posWrap = document.createElement('div');
+        posWrap.className = 'sabotage-field';
+        if (beforeOk) {
+          const b = document.createElement('button');
+          b.textContent = `マス${task.slot}に設置${me.rail[task.slot - 1] ? '（上書き）' : ''}`;
+          b.className = state.position === 'before' ? 'primary' : '';
+          b.addEventListener('click', () => { state.position = 'before'; render(); });
+          posWrap.appendChild(b);
+        }
+        if (selfOk) {
+          const b = document.createElement('button');
+          b.textContent = `マス${task.slot + 1}（交換されたマス）に設置${me.rail[task.slot] ? '（上書き）' : ''}`;
+          b.className = state.position === 'self' ? 'primary' : '';
+          b.addEventListener('click', () => { state.position = 'self'; render(); });
+          posWrap.appendChild(b);
+        }
+        if (afterOk) {
+          const b = document.createElement('button');
+          b.textContent = `マス${task.slot + 2}に設置${me.rail[task.slot + 1] ? '（上書き）' : ''}`;
+          b.className = state.position === 'after' ? 'primary' : '';
+          b.addEventListener('click', () => { state.position = 'after'; render(); });
+          posWrap.appendChild(b);
+        }
+        wrap.appendChild(posWrap);
+      }
+      if (card && card.kind === 'part' && card.type === 'brake') {
+        const brakeWrap = document.createElement('div');
+        brakeWrap.className = 'hint';
+        brakeWrap.textContent = 'ブレーキ：下げる速度の値';
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.value = state.brakeReduce !== undefined ? state.brakeReduce : 0;
+        input.style.width = '60px';
+        input.addEventListener('change', () => { state.brakeReduce = parseInt(input.value, 10) || 0; });
+        brakeWrap.appendChild(input);
+        wrap.appendChild(brakeWrap);
+      }
+
+      const confirmBtn = document.createElement('button');
+      confirmBtn.className = 'primary';
+      confirmBtn.textContent = 'このパーツを設置する';
+      confirmBtn.addEventListener('click', () => {
+        if (task.type === 'swapped' && !state.position) { alert('設置する位置を選んでください'); return; }
+        socket.emit('resolveRecovery', {
+          taskId: task.id,
+          cardId: state.cardId,
+          position: state.position,
+          brakeReduce: state.brakeReduce,
+        }, (res) => {
+          if (!res.ok) return alert(res.error);
+          delete recoveryChoiceState[task.id];
+        });
+      });
+      wrap.appendChild(confirmBtn);
+    }
+
+    // パーツ破壊（レベル低下による破壊を含む）の復旧は必須のため、山札が残っている限り見送りは選べない
+    if (!mandatory) {
+      const skipBtn = document.createElement('button');
+      skipBtn.textContent = '設置しない（見送る）';
+      skipBtn.addEventListener('click', () => {
+        socket.emit('resolveRecovery', { taskId: task.id }, (res) => {
+          if (!res.ok) return alert(res.error);
+          delete recoveryChoiceState[task.id];
+        });
+      });
+      wrap.appendChild(skipBtn);
+    }
+
+    box.appendChild(wrap);
+  });
+}
+
+function renderTrial() {
+  const log = el('trialLog');
+  log.innerHTML = '';
+  const s = latestState;
+  trialLines.forEach((d) => {
+    const p = s.players.find((pl) => pl.id === d.playerId);
+    const name = p ? p.name : '?';
+    const line = document.createElement('div');
+    line.className = 'trial-line' + (d.safety ? ' safety' : '');
+    if (!d.card) {
+      line.textContent = `${name} - マス${d.slot + 1}：（空き）`;
+    } else {
+      const custStr = d.customers.map((c) => `${customerIcon(c.typeKey, 'customer-icon-img small')}${c.name}:${c.satisfaction}${c.everReset ? '(固定)' : ''}`).join(' / ');
+      line.innerHTML = `${name} - マス${d.slot + 1}：${partIcon(d.card, 'part-icon-img small')}${cardLabel(d.card)} → 高度${d.altitude} 速度${d.speed} スリル${d.thrill}${d.safety ? ' ⚠安全装置作動' : ''}｜${custStr}`;
+    }
+    log.appendChild(line);
+  });
+  log.scrollTop = log.scrollHeight;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function renderScoreBar(s) {
+  const bar = el('scoreBar');
+  bar.innerHTML = '';
+  if (!resultAnim) return;
+  const activePlayerId = resultAnim.currentIndex >= 0 && s.trialResults[resultAnim.currentIndex]
+    ? s.trialResults[resultAnim.currentIndex].playerId
+    : null;
+  s.players.forEach((p) => {
+    const chip = document.createElement('div');
+    const isActive = !resultAnim.done && p.id === activePlayerId;
+    chip.className = 'score-chip' + (isActive ? ' bump' : '');
+    const val = Math.round(resultAnim.totals[p.id] || 0);
+    chip.innerHTML = `<div class="sc-name">${p.name}${p.id === s.myId ? '（あなた）' : ''}${isActive ? ' 🎢' : ''}</div><div class="sc-val">${val}</div>`;
+    bar.appendChild(chip);
+  });
+}
+
+function renderResultsPending(s) {
+  el('resultBoard').innerHTML = '';
+  const box = el('resultCalc');
+  box.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'hint';
+
+  const r = s.trialResults[resultAnim.currentIndex];
+  if (!r) {
+    title.textContent = '満足度を計算しています…';
+    box.appendChild(title);
+    return;
+  }
+  const railLen = r.history.length;
+
+  if (resultAnim.step < railLen) {
+    title.textContent = `${r.name} のレールを集計中… マス${resultAnim.step + 1}/${railLen}`;
+    const rows = document.createElement('div');
+    const h = r.history[resultAnim.step];
+    if (h && h.cardLabel) {
+      const line = document.createElement('div');
+      line.className = 'trial-line' + (h.totalDelta < 0 ? ' safety' : h.totalDelta > 0 ? ' just' : '');
+      line.textContent = `マス${resultAnim.step + 1}：${h.cardLabel} → ${h.totalDelta >= 0 ? '+' : ''}${h.totalDelta}点`;
+      rows.appendChild(line);
+    }
+    box.appendChild(rows);
+  } else {
+    title.textContent = `${r.name} の客層スキルを集計中…`;
+  }
+  box.insertBefore(title, box.firstChild);
+}
+
+// 結果発表アニメーションの1ティック分だけを軽量に再描画する（ページ全体のrender()は呼ばない）。
+// 途中でrender()を再帰的に呼ぶと、他の状態更新と絡んで表示が固まる原因になるため、
+// アニメーション専用の更新経路として完全に切り離してある。
+function renderResultTick(s) {
+  renderScoreBar(s);
+  renderPlayersBoard(s);
+  if (resultAnim.done) renderResults(s);
+  else renderResultsPending(s);
+}
+
+async function runResultAnimation(s) {
+  try {
+    // 上（1人目）のプレイヤーから順に、1マス目から順に計算結果を反映していく
+    for (let idx = 0; idx < s.trialResults.length; idx++) {
+      const r = s.trialResults[idx];
+      resultAnim.currentIndex = idx;
+      const railLen = r.history.length;
+      for (let step = 0; step < railLen; step++) {
+        resultAnim.step = step;
+        const h = r.history[step];
+        if (h) resultAnim.totals[r.playerId] += h.totalDelta;
+        renderResultTick(s);
+        await wait(1000);
+      }
+      resultAnim.step = railLen;
+      renderResultTick(s);
+      await wait(800);
+      resultAnim.totals[r.playerId] += r.skillTotal;
+      renderResultTick(s);
+      await wait(600);
+    }
+  } catch (e) {
+    console.error('結果発表アニメーション中にエラーが発生しました。最終結果を直接表示します。', e);
+  } finally {
+    // 途中で何が起きても、必ず最終結果が正しく表示された状態で終わらせる
+    resultAnim.currentIndex = s.trialResults.length - 1;
+    resultAnim.totals = Object.fromEntries(s.trialResults.map((r) => [r.playerId, r.total]));
+    resultAnim.done = true;
+    renderResultTick(s);
+  }
+}
+
+// 試運転フェイズ／結果発表で、ボーナス満足度の計算結果を各プレイヤーのマップの右側に表示する。
+// スキルボーナスは全マス走り終わってから加算されるため、そのタイミングに合わせて出す。
 function buildRailBonusBox(s, playerId) {
   const r = (s.trialResults || []).find((x) => x.playerId === playerId);
   if (!r) return null;

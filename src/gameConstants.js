@@ -38,11 +38,11 @@ const DROP_DEFS = [
 
 // ---- 客層カード (6種類×2枚=12枚) ----
 const CUSTOMER_TYPES = [
-  { key: 'elder', name: '常連の老人', durability: 2, skillDesc: '全レールにおいてスリル値2以下 → +15', skillPoints: 15 },
-  { key: 'family', name: '家族連れ', durability: 2, skillDesc: '異なるパーツ種類を5種類以上通過 → +10', skillPoints: 10 },
-  { key: 'schoolTrip', name: '修学旅行生', durability: 3, skillDesc: 'スリル値が3マス連続で上昇 → +10', skillPoints: 10 },
-  { key: 'streamer', name: '動画配信者', durability: 3, skillDesc: '最終マスが最大スリル値 → +12', skillPoints: 12 },
-  { key: 'couple', name: 'カップル', durability: 4, skillDesc: '+4×(トンネル枚数)', skillPoints: 4 },
+  { key: 'elder', name: '常連の老人', durability: 2, skillDesc: '全レールにおいてスリル値2以下 → +10', skillPoints: 10 },
+  { key: 'family', name: '家族連れ', durability: 2, skillDesc: '異なるパーツ種類を5種類以上通過 → +15', skillPoints: 15 },
+  { key: 'schoolTrip', name: '修学旅行生', durability: 3, skillDesc: 'スリル値2以上が3マス連続 → +10', skillPoints: 10 },
+  { key: 'streamer', name: '動画配信者', durability: 3, skillDesc: '8マス目が最大スリル値（同率含む） → +10', skillPoints: 10 },
+  { key: 'couple', name: 'カップル', durability: 4, skillDesc: '+10×(トンネル枚数)', skillPoints: 10 },
   { key: 'thrillSeeker', name: '絶叫マニア', durability: 5, skillDesc: 'スリル値５のマスを1回以上通過 → +50', skillPoints: 50 },
 ];
 
