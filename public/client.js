@@ -56,15 +56,15 @@ const PHASE_LABEL = {
   lobby: 'ロビー：参加者待ち',
   draft: 'ドラフトフェイズ',
   placement: '配置フェイズ',
-  sabotage: '妨害フェイズ',
+  sabotage: '補助フェイズ',
   recovery: '復旧フェイズ',
   trial: '試運転フェイズ',
   finished: '結果発表',
 };
 
 const SABOTAGE_LABELS = {
-  customer: '客層妨害',
-  part: 'パーツ妨害',
+  customer: '客層補助',
+  part: 'パーツ補助',
 };
 
 const SAFETY_NOTE = '条件を満たさないと安全装置作動（スリル0・以降の満足度はこの直前の値で固定される）';
@@ -397,7 +397,78 @@ function renderRecordsBar(s) {
   });
 }
 
-// 客層は妨害（交換・出禁）によりプレイヤーごとに内容が変わっていくため、ここには
+// 補助フェイズの実行順（レール配置位置の合計値が小さい人から）を、盤面の上に常時表示する
+function renderSabotageOrderBar(s) {
+  const bar = el('sabotageOrderBar');
+  const order = s.sabotageOrder || [];
+  const show = s.phase === 'sabotage' && order.length > 0;
+  bar.classList.toggle('hidden', !show);
+  if (!show) return;
+  bar.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.className = 'order-bar-title';
+  title.textContent = '🔄 補助フェイズの実行順（レール配置位置の合計値が小さい人から）';
+  bar.appendChild(title);
+
+  const row = document.createElement('div');
+  row.className = 'order-chips';
+  order.forEach((entry, i) => {
+    const chip = document.createElement('span');
+    const isCurrent = entry.playerId === s.sabotageTurnPlayerId;
+    chip.className = 'order-chip' + (isCurrent ? ' current' : '') + (entry.done ? ' done' : '');
+    const you = entry.playerId === s.myId ? '（あなた）' : '';
+    chip.textContent = `${i + 1}. ${entry.name}${you}（合計${entry.positionSum}）${entry.done ? ' ✔' : ''}${isCurrent ? ' ← 今' : ''}`;
+    row.appendChild(chip);
+    if (i < order.length - 1) {
+      const arrow = document.createElement('span');
+      arrow.className = 'order-arrow';
+      arrow.textContent = '→';
+      row.appendChild(arrow);
+    }
+  });
+  bar.appendChild(row);
+}
+
+// 誰が何をされたのか一目で分かるよう、補助フェイズの行為内容を画面中央に数秒表示する
+let shownSabotageEventIds = new Set();
+let sabotageToastTimer = null;
+function renderSabotageToast(s) {
+  const events = s.sabotageEvents || [];
+  if (s.phase !== 'sabotage' && s.phase !== 'recovery') {
+    // フェイズが変わったら表示済み記録をリセットしておく
+    if (!events.length) shownSabotageEventIds = new Set();
+    return;
+  }
+  const fresh = events.filter((e) => !shownSabotageEventIds.has(e.id));
+  if (!fresh.length) return;
+  fresh.forEach((e) => shownSabotageEventIds.add(e.id));
+  showSabotageToast(fresh.map((e) => e.text));
+}
+
+function showSabotageToast(texts) {
+  const toast = el('sabotageToast');
+  toast.innerHTML = '';
+  const title = document.createElement('div');
+  title.className = 'toast-title';
+  title.textContent = '🎭 補助カードが使われました';
+  toast.appendChild(title);
+  texts.forEach((t) => {
+    const line = document.createElement('div');
+    line.className = 'toast-line';
+    line.textContent = t;
+    toast.appendChild(line);
+  });
+  toast.classList.remove('hidden');
+  if (sabotageToastTimer) clearTimeout(sabotageToastTimer);
+  // 数秒間表示してから消す
+  sabotageToastTimer = setTimeout(() => {
+    el('sabotageToast').classList.add('hidden');
+    sabotageToastTimer = null;
+  }, 4000);
+}
+
+// 客層は補助（交換・出禁）によりプレイヤーごとに内容が変わっていくため、ここには
 // 「全員共通の公開履歴」ではなく「自分が現在持っている客層」を表示する
 function renderCustomers(s) {
   const bar = el('customerBar');
@@ -456,7 +527,7 @@ function cardClass(c) {
   return `card part thrill${c.thrill}`;
 }
 
-// このラウンドで置くべきパーツ枚数。妨害のパーツ交換・破壊で枚数がずれても
+// このラウンドで置くべきパーツ枚数。補助のパーツ交換・破壊で枚数がずれても
 // 「累計でラウンド数×2枚」になるようサーバーが調整した値を使う
 function requiredPlacementCount(s) {
   return s && typeof s.myRequiredPlacementCount === 'number' ? s.myRequiredPlacementCount : 2;
@@ -625,12 +696,19 @@ function renderPlayersBoard(s) {
       panel.appendChild(custRow);
     }
 
-    // ジェットコースターボードは横2列に並べ、マス1→マス2を一行目にして縦に揃えていく
+    // ジェットコースターマップ：スタートマスを左端に置き、その右側に
+    // 8レールなら縦2マス×挑4マス、16レールなら縦2マス×挑8マスとなるように並べる
+    const cols = Math.max(1, Math.ceil(p.rail.length / 2));
     const rail = document.createElement('div');
-    rail.className = 'rail rail-2col';
+    rail.className = 'rail rail-map';
+    // 左端のスタート列 + マップ本体の列数
+    rail.style.gridTemplateColumns = `auto repeat(${cols}, 66px)`;
 
     const startBox = document.createElement('div');
     startBox.className = 'slot start-slot';
+    // スタートマスは左端で1列目・縦2行分をぶち抜きで使う
+    startBox.style.gridColumn = '1';
+    startBox.style.gridRow = '1 / span 2';
     startBox.innerHTML = `<span class="idx">0</span><span class="slot-info">スタート</span><span class="slot-info">高2</span><span class="slot-info">速2</span>`;
     rail.appendChild(startBox);
 
@@ -645,6 +723,9 @@ function renderPlayersBoard(s) {
     p.rail.forEach((card, slot) => {
       const div = document.createElement('div');
       div.className = 'slot' + (card ? ' filled' : '');
+      // マス1から横に並べ、列数を超えたら下の行へ折り返す
+      div.style.gridColumn = String(2 + (slot % cols));
+      div.style.gridRow = String(1 + Math.floor(slot / cols));
 
       const idx = document.createElement('span');
       idx.className = 'idx';
@@ -688,6 +769,12 @@ function renderPlayersBoard(s) {
       const val = Math.round(resultAnim.totals[p.id] || 0);
       totalBox.innerHTML = `<span class="rail-total-label">合計</span><span class="rail-total-val">${val}</span>`;
       railRow.appendChild(totalBox);
+    }
+
+    // ボーナス満足度の計算結果を、マップの右側に表示する
+    if (s.phase === 'trial' || s.phase === 'finished') {
+      const bonusBox = buildRailBonusBox(s, p.id);
+      if (bonusBox) railRow.appendChild(bonusBox);
     }
 
     panel.appendChild(railRow);
@@ -801,7 +888,7 @@ function renderMyControls(s) {
     const info = document.createElement('div');
     info.className = 'hint';
     if (needCount === 0) {
-      // 妨害のパーツ交換などで、すでにラウンド数×2枚に達している場合
+      // 補助のパーツ交換などで、すでにラウンド数×2枚に達している場合
       info.textContent = `すでに設置枚数（${s.requiredPlacedTotal}枚）に達しているため、今回は配置する必要がありません。「配置を確定」を押してください。`;
     } else {
       info.textContent = `カードを選んでから、上のレールで空きマスをクリックして配置してください（このラウンド終了時に合計${s.requiredPlacedTotal}枚になります）。`;
@@ -895,37 +982,40 @@ function makeLabeledSelect(labelText, options, state, key, numeric) {
   return wrap;
 }
 
-// ---------- 妨害フェイズ ----------
-// 2枚配られた妨害カードのうち、使えるのは1枚だけ。選ぶ → 効果の対象（客層・パーツ）を選ぶ、の2段階にする。
+// ---------- 補助フェイズ ----------
+// 2枚配られた補助カードのうち、使えるのは1枚だけ。選ぶ → 効果の対象（客層・パーツ）を選ぶ、の2段階にする。
 let sabotageSelectedCardId = null;
 let sabotagePlayParams = {}; // 選択中の1枚に対する対象プレイヤー・客層・パーツなどのパラメータ
-let pendingChoiceState = {}; // choice.id -> { idx } : 他プレイヤーからの妨害への対応（客層/パーツ選択）を保持
+let pendingChoiceState = {}; // choice.id -> { idx } : 他プレイヤーからの補助への対応（客層/パーツ選択）を保持
 
 // カードごとに「実際に選択可能な対象プレイヤー」だけを返す（対象がいないカードは選べないようにする）
-function getValidSabotageTargets(card, me, otherPlayers) {
+// 「補助カード」なので、自分自身も対象に選べる（allPlayers には自分も含む）。
+// ただし「相互交換」系は自分同士では意味がないため、他プレイヤーのみ。
+function getValidSabotageTargets(card, me, allPlayers) {
+  const others = allPlayers.filter((p) => p.id !== me.id);
   switch (card.type) {
     case 'custRandomSwap':
-      return otherPlayers.filter((p) => p.customers && p.customers.length > 0);
+      return allPlayers.filter((p) => p.customers && p.customers.length > 0);
     case 'custMutualSwap':
       if (!me.customers || me.customers.length === 0) return [];
-      return otherPlayers.filter((p) => p.customers && p.customers.length > 0);
+      return others.filter((p) => p.customers && p.customers.length > 0);
     case 'custBanType':
-      return otherPlayers;
+      return allPlayers;
     case 'partDestroy':
-      return otherPlayers.filter((p) => p.rail.some((c) => c));
+      return allPlayers.filter((p) => p.rail.some((c) => c));
     case 'partSwap':
       if (!me.rail.some((c) => c)) return [];
-      return otherPlayers.filter((p) => p.rail.some((c) => c));
+      return others.filter((p) => p.rail.some((c) => c));
     case 'partLevelDown':
-      return otherPlayers.filter((p) => p.rail.some((c) => c && (c.kind === 'climb' || c.kind === 'drop')));
+      return allPlayers.filter((p) => p.rail.some((c) => c && (c.kind === 'climb' || c.kind === 'drop')));
     default:
-      return otherPlayers;
+      return allPlayers;
   }
 }
 
 function renderSabotagePhase(s, me, box) {
   const title = document.createElement('h3');
-  title.textContent = '妨害フェイズ（相手を妨害するか、妨害への対応をしてください）';
+  title.textContent = '補助フェイズ（相手を補助するか、補助への対応をしてください）';
   box.appendChild(title);
 
   const handIds = new Set((me.sabotageHand || []).map((c) => c.id));
@@ -934,7 +1024,7 @@ function renderSabotagePhase(s, me, box) {
     sabotagePlayParams = {};
   }
 
-  // 1. 自分が対応すべき妨害（他プレイヤーから受けたカードで、自分の選択が必要なもの）
+  // 1. 自分が対応すべき補助（他プレイヤーから受けたカードで、自分の選択が必要なもの）
   // 選択中の値はchoice.idごとに永続化する（renderのたびにstateを作り直すと、選び直しても
   // 常に最初の選択肢に戻ってしまい、実質「最初のパーツしか選べない」不具合になっていた）
   const choiceIds = new Set((me.pendingSabotageChoices || []).map((c) => c.id));
@@ -984,23 +1074,24 @@ function renderSabotagePhase(s, me, box) {
     box.appendChild(wrap);
   });
 
-  // 2. 自分の妨害カードの使用（プレイヤーごとに順番に行う）
+  // 2. 自分の補助カードの使用（プレイヤーごとに順番に行う）
   const turnPlayer = s.players.find((p) => p.id === s.sabotageTurnPlayerId);
   const turnTag = document.createElement('div');
   turnTag.className = 'hint sabotage-turn-tag';
-  turnTag.textContent = turnPlayer ? `🎯 現在の妨害ターン：${turnPlayer.name}${turnPlayer.id === s.myId ? '（あなた）' : ''}` : '';
+  turnTag.textContent = turnPlayer ? `🎯 現在の補助ターン：${turnPlayer.name}${turnPlayer.id === s.myId ? '（あなた）' : ''}` : '';
   box.appendChild(turnTag);
 
   if (me.sabotageSubmitted) {
-    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '妨害カードは提出済みです。他のプレイヤーを待っています…' }));
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: '補助カードは提出済みです。他のプレイヤーを待っています…' }));
     return;
   }
   if (s.sabotageTurnPlayerId !== s.myId) {
-    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: `${turnPlayer ? turnPlayer.name : '他のプレイヤー'} の妨害ターンです。順番をお待ちください…` }));
+    box.appendChild(Object.assign(document.createElement('div'), { className: 'hint', textContent: `${turnPlayer ? turnPlayer.name : '他のプレイヤー'} の補助ターンです。順番をお待ちください…` }));
     return;
   }
 
-  const otherPlayers = s.players.filter((p) => p.id !== s.myId);
+  // 補助カードは自分も対象にできるため、全プレイヤーを渡す
+  const allPlayers = s.players;
   const info = document.createElement('div');
   info.className = 'hint';
   info.textContent = '2枚のうち、使うカードを1枚だけ選んでください（使わなくても構いません）。選ぶと効果の対象を指定できます。';
@@ -1009,7 +1100,7 @@ function renderSabotagePhase(s, me, box) {
   const handRow = document.createElement('div');
   handRow.className = 'sabotage-hand';
   (me.sabotageHand || []).forEach((card) => {
-    const validTargets = getValidSabotageTargets(card, me, otherPlayers);
+    const validTargets = getValidSabotageTargets(card, me, allPlayers);
     const usable = validTargets.length > 0;
     const isSelected = sabotageSelectedCardId === card.id;
 
@@ -1045,7 +1136,7 @@ function renderSabotagePhase(s, me, box) {
     if (isSelected) {
       cardBox.appendChild(makeLabeledSelect(
         '対象プレイヤー：',
-        validTargets.map((op) => ({ value: op.id, label: op.name })),
+        validTargets.map((op) => ({ value: op.id, label: op.id === s.myId ? `${op.name}（あなた）` : op.name })),
         sabotagePlayParams, 'targetPlayerId', false,
       ));
       const target = s.players.find((p) => p.id === sabotagePlayParams.targetPlayerId);
@@ -1365,6 +1456,61 @@ async function runResultAnimation(s) {
     resultAnim.done = true;
     renderResultTick(s);
   }
+}
+
+// 試運転フェイズ／結果発表で、ボーナス満足度の計算結果を各プレイヤーのマップの右側に表示する。
+// スキルボーナスは全マス走り終わってから加算されるため、そのタイミングに合わせて出す。
+function buildRailBonusBox(s, playerId) {
+  const r = (s.trialResults || []).find((x) => x.playerId === playerId);
+  if (!r) return null;
+
+  // 結果発表アニメーション中は、そのプレイヤーの走行が終わるまでボーナスを伏せておく
+  let revealed = true;
+  if (resultAnim && !resultAnim.done) {
+    const idx = s.trialResults.findIndex((x) => x.playerId === playerId);
+    if (idx > resultAnim.currentIndex) revealed = false;
+    else if (idx === resultAnim.currentIndex && resultAnim.step < r.history.length) revealed = false;
+  }
+
+  const box = document.createElement('div');
+  box.className = 'rail-bonus';
+
+  const title = document.createElement('div');
+  title.className = 'rail-bonus-title';
+  title.textContent = '🎁 ボーナス満足度';
+  box.appendChild(title);
+
+  if (!revealed) {
+    const wait = document.createElement('div');
+    wait.className = 'rail-bonus-wait';
+    wait.textContent = '試運転中…';
+    box.appendChild(wait);
+    return box;
+  }
+
+  const addRow = (mark, name, pt, achieved) => {
+    const row = document.createElement('div');
+    row.className = 'rail-bonus-row' + (achieved ? ' achieved' : '');
+    row.innerHTML = `<span class="rb-mark">${mark}</span><span class="rb-name">${name}</span><span class="rb-pt">${pt}</span>`;
+    box.appendChild(row);
+  };
+
+  // 客層スキル
+  r.skills.forEach((sk) => {
+    addRow(sk.achieved ? '☑' : '☐', `${customerIcon(sk.typeKey, 'customer-icon-img small')} ${sk.name}`,
+      (sk.achieved || sk.bonus) ? `+${sk.bonus}` : '±0', sk.achieved || sk.bonus > 0);
+  });
+  // 記録更新
+  (r.records || []).forEach((rec) => addRow('🏅', rec.label, `+${rec.bonus}`, true));
+  // 着地ボーナス
+  if (r.endAltitudeBonus) addRow('🛬', '着地ボーナス', `+${r.endAltitudeBonus}`, true);
+
+  const sum = document.createElement('div');
+  sum.className = 'rail-bonus-sum';
+  sum.innerHTML = `<span>ボーナス計</span><span class="rb-sum-val">+${r.skillTotal}</span>`;
+  box.appendChild(sum);
+
+  return box;
 }
 
 function renderResults(s) {

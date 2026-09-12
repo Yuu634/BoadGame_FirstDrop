@@ -93,14 +93,14 @@ const RECORD_DEFS = [
   },
 ];
 
-// ---- 妨害カード（客層妨害3種＋パーツ妨害3種、各4枚＝計24枚） ----
+// ---- 補助カード（客層補助3種＋パーツ補助3種、各4枚＝計24枚） ----
 const SABOTAGE_DEFS = [
   {
     type: 'custRandomSwap',
     category: 'customer',
     label: '客層ランダム交換',
-    desc: '対象を1人指定する。対象は自分の客層を1人選び、その客層をランダムな新しい客層と入れ替える（入れ替える客層は対象が指定）。',
-    needsTargetChoice: true,
+    desc: '対象を1人指定する。対象のランダムな客層一人を、別のランダムな新しい客層と入れ替える。',
+    needsTargetChoice: false,
   },
   {
     type: 'custMutualSwap',

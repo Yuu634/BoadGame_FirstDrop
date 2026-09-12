@@ -170,7 +170,16 @@ function runTrial(room) {
     }
   };
 
-  room.startTrialPhase(emitStep).then(() => {
+  // 1人分の試運転が終わるたびに配信し、ボーナス満足度を順次表示できるようにする
+  const onPlayerDone = () => {
+    try {
+      broadcastRoom(room);
+    } catch (e) {
+      console.error(`[room ${room.id}] 試運転途中の配信に失敗しました:`, e);
+    }
+  };
+
+  room.startTrialPhase(emitStep, onPlayerDone).then(() => {
     broadcastRoom(room);
     io.to(room.id).emit('gameOver', { winners: room.winners, results: room.trialResults });
   }).catch((e) => {
