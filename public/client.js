@@ -178,11 +178,140 @@ let joined = false;
 
 // placement UI local state
 let selectedCardId = null;
+let draftSelectedCardId = null;
+let placementBrakeReduce = 0;
+let actionPending = false;
 let pendingPlacements = []; // {cardId, slot, card}
 const trialLines = [];
 let resultAnim = null; // { totals:{playerId:number}, currentIndex:number, step:number, done:boolean }
 
 const el = (id) => document.getElementById(id);
+
+const motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)');
+const reducedMotion = () => motionPreference.matches;
+motionPreference.addEventListener('change', () => {
+  if (!reducedMotion()) return;
+  document.querySelectorAll('[data-motion-id], .card-flight').forEach((node) => node.getAnimations().forEach((animation) => animation.cancel()));
+});
+let feedbackTimer;
+function showFeedback(message) {
+  const box = el('actionFeedback');
+  box.textContent = message;
+  box.classList.remove('hidden');
+  clearTimeout(feedbackTimer);
+  feedbackTimer = setTimeout(() => box.classList.add('hidden'), 3200);
+}
+
+// Lock submissions until the server acknowledges them; local selection remains reversible.
+function submitAction(event, data, callback) {
+  if (actionPending) return;
+  actionPending = true;
+  render();
+  socket.timeout(8000).emit(event, data, (error, response) => {
+    actionPending = false;
+    if (error) showFeedback('応答を確認できませんでした。盤面の状態を確認してから、もう一度操作してください。');
+    else callback(response);
+    render();
+  });
+}
+
+function makeInteractive(node, label, onClick) {
+  node.setAttribute('role', 'button');
+  node.tabIndex = 0;
+  node.setAttribute('aria-label', label);
+  node.addEventListener('click', () => { if (!actionPending) onClick(); });
+  node.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      if (!actionPending) onClick();
+    }
+  });
+}
+
+function decorateHand(row) {
+  row.classList.add('card-hand');
+  Array.from(row.children).forEach((card, i, cards) => {
+    card.style.setProperty('--fan-angle', `${(i - (cards.length - 1) / 2) * 3}deg`);
+    card.style.setProperty('--fan-rise', `${Math.abs(i - (cards.length - 1) / 2) * 3}px`);
+  });
+}
+
+function renderTurnGuide(s, me) {
+  const guide = el('turnGuide');
+  guide.classList.toggle('hidden', s.phase === 'lobby');
+  if (!me || s.phase === 'lobby') return;
+  const phases = [['draft', 'カードを集める'], ['placement', 'レールに置く']];
+  if (s.settings.sabotageEnabled) phases.push(['sabotage', 'イベント']);
+  if (s.phase === 'recovery') phases.push(['recovery', '復旧']);
+  phases.push(['trial', '試運転'], ['finished', '結果']);
+  el('phaseSteps').innerHTML = phases.map(([phase, label], i) => `<span class="phase-step${phase === s.phase ? ' current' : ''}" ${phase === s.phase ? 'aria-current="step"' : ''}><b>${i + 1}</b>${label}</span>`).join('');
+  let title = '', hint = '', active = true;
+  if (s.phase === 'draft') {
+    active = !me.hasPendingPick;
+    title = active ? (draftSelectedCardId ? 'このカードを手札に加えますか？' : '受け取るカードを1枚選びましょう') : '選択完了。みんなの選択を待っています';
+    hint = '残りのカードは隣のプレイヤーへ。最後の1枚は自動で受け取り、合計3枚を集めます。';
+  } else if (s.phase === 'placement') {
+    active = !me.placedThisRound;
+    title = me.placedThisRound ? '配置完了。みんなの配置を待っています' : selectedCardId ? '光っている空きマスを選びましょう' : pendingPlacements.length === requiredPlacementCount(s) ? 'コースを確認して、配置を確定しましょう' : '手札からレールに置くカードを選びましょう';
+    hint = me.placedThisRound ? '全員が配置を確定すると、次のフェイズへ進みます。他のプレイヤーのコースも見てみましょう。' : `配置予定 ${pendingPlacements.length} / ${requiredPlacementCount(s)}枚。確定前なら置いたカードを押して取り消せます。未使用のカードは持ち越せません。`;
+  } else if (s.phase === 'sabotage') {
+    active = !!me.pendingSabotageChoices.length || (s.sabotageTurnPlayerId === s.myId && !me.sabotageSubmitted);
+    title = me.pendingSabotageChoices.length ? '届いたイベントの対象を選んでください' : active ? '補助カードを1枚使うか、見送りましょう' : '他のプレイヤーのイベントを待っています';
+    hint = '使えるカードを選ぶと対象が表示されます。効果と対象を確認して確定してください。';
+  } else if (s.phase === 'recovery') {
+    active = s.recoveryTurnPlayerId === s.myId && me.recoveryTasks.length > 0;
+    title = active ? 'カードを選んでレールを復旧しましょう' : '他のプレイヤーがレールを復旧しています';
+    hint = '破壊されたマスは復旧が必要です。交換されたマスは、そのマスか前後のマスに置けます。';
+  } else {
+    active = false;
+    title = s.phase === 'trial' ? 'コースターが走行中です' : 'みんなの満足度を発表します';
+    hint = 'スリルと客層の耐性が一致すると「スリル＋5」点。安全装置が作動すると、その先の得点は増えません。';
+  }
+  guide.classList.toggle('waiting', !active || actionPending);
+  el('guideBadge').textContent = actionPending ? '送信中' : active ? 'あなたの操作' : '進行状況';
+  el('guideTitle').textContent = title;
+  el('guideHint').textContent = hint;
+  const status = `${el('guideBadge').textContent}：${title}`;
+  if (el('guideStatus').textContent !== status) el('guideStatus').textContent = status;
+}
+
+// Keep keyboard focus and animate only cards that entered or actually moved.
+function captureUi() {
+  return new Map(Array.from(document.querySelectorAll('[data-motion-id]'), (node) => [node.dataset.motionId, {
+    rect: node.getBoundingClientRect(),
+    card: node.classList.contains('card-v') ? node.cloneNode(true) : null,
+  }]));
+}
+function animateUi(previous) {
+  if (reducedMotion()) return;
+  document.querySelectorAll('[data-motion-id]').forEach((node) => {
+    const snapshot = previous.get(node.dataset.motionId);
+    const before = snapshot?.rect;
+    const after = node.getBoundingClientRect();
+    if (!after.width) return;
+    if (!before) node.animate([{ opacity: 0, translate: '0 18px' }, { opacity: 1, translate: '0 0' }], { duration: 320, easing: 'ease-out' });
+    else if (snapshot.card && node.classList.contains('slot')) {
+      // A fixed overlay keeps the travelling card visible outside the scrollable hand/rail.
+      const flight = document.createElement('div');
+      flight.className = 'card-hand card-flight';
+      flight.setAttribute('aria-hidden', 'true');
+      flight.inert = true;
+      snapshot.card.removeAttribute('data-motion-id');
+      snapshot.card.removeAttribute('data-focus-key');
+      snapshot.card.classList.remove('chosen', 'selectable');
+      flight.appendChild(snapshot.card);
+      Object.assign(flight.style, { left: `${before.x}px`, top: `${before.y}px`, width: `${before.width}px`, height: `${before.height}px` });
+      document.body.appendChild(flight);
+      const motion = flight.animate([
+        { transform: 'translate(0, 0) scale(1)', opacity: 1 },
+        { transform: `translate(${after.x - before.x}px, ${after.y - before.y}px) scale(${after.width / before.width}, ${after.height / before.height})`, opacity: .15 },
+      ], { duration: 380, easing: 'cubic-bezier(.2,.8,.2,1)' });
+      motion.finished.then(() => flight.remove(), () => flight.remove());
+    } else if (Math.abs(before.x - after.x) > 2 || Math.abs(before.y - after.y) > 2) {
+      node.animate([{ translate: `${before.x - after.x}px ${before.y - after.y}px` }, { translate: '0 0' }], { duration: 360, easing: 'cubic-bezier(.2,.8,.2,1)' });
+    }
+  });
+}
 
 // ---------- lobby screen wiring ----------
 const params = new URLSearchParams(location.search);
@@ -299,8 +428,22 @@ el('playAgainBtn').addEventListener('click', () => {
   });
 });
 
+el('skipResultBtn').addEventListener('click', () => {
+  if (!resultAnim || !latestState || latestState.phase !== 'finished') return;
+  resultAnim.done = true;
+  resultAnim.totals = Object.fromEntries(latestState.trialResults.map((r) => [r.playerId, r.total]));
+  renderResultTick(latestState);
+});
+
 // ---------- socket state events ----------
 socket.on('state', (state) => {
+  const me = state.players.find((p) => p.id === state.myId);
+  if (!latestState || latestState.phase !== state.phase || latestState.round !== state.round || (me && me.placedThisRound)) {
+    pendingPlacements = [];
+    selectedCardId = null;
+  }
+  if (state.phase !== 'draft' || me.hasPendingPick || !state.myDraftPacket.some((c) => c.id === draftSelectedCardId)) draftSelectedCardId = null;
+  if (state.phase === 'draft' && (!latestState || latestState.phase !== 'draft') && state.round === 1) trialLines.length = 0;
   latestState = state;
   render();
 });
@@ -310,6 +453,7 @@ socket.on('log', () => {});
 socket.on('trialStep', (detail) => {
   trialLines.push(detail);
   renderTrial();
+  if (latestState) renderPlayersBoard(latestState);
 });
 
 socket.on('gameOver', () => {
@@ -319,7 +463,11 @@ socket.on('gameOver', () => {
 // ---------- rendering ----------
 function render() {
   if (!latestState) return;
+  const previous = captureUi();
+  const focused = document.activeElement;
+  const focusKey = focused && focused.dataset.focusKey;
   const s = latestState;
+  const me = s.players.find((p) => p.id === s.myId);
   el('phaseInfo').textContent = `${PHASE_LABEL[s.phase] || s.phase}${s.round ? '（ラウンド' + s.round + '/' + (s.rounds || s.round) + '）' : ''}`;
 
   el('lobbyWait').classList.toggle('hidden', s.phase !== 'lobby');
@@ -339,8 +487,21 @@ function render() {
 
   renderRecordsBar(s);
   renderCustomers(s);
+  // Detach the controls before replacing player panels.
+  el('gameScreen').appendChild(el('myControls'));
   renderPlayersBoard(s);
   renderMyControls(s);
+  const myPanel = document.querySelector('.player-panel.me');
+  if (myPanel) myPanel.appendChild(el('myControls'));
+  el('myControls').classList.toggle('hidden', !['draft', 'placement', 'sabotage', 'recovery'].includes(s.phase));
+  el('playersBoard').classList.toggle('hidden', s.phase === 'lobby');
+  el('customerBar').classList.toggle('hidden', s.phase === 'lobby');
+  renderTurnGuide(s, me);
+  renderSabotageOrderBar(s);
+  renderSabotageToast(s);
+  el('myControls').classList.toggle('submitting', actionPending);
+  el('myControls').setAttribute('aria-busy', String(actionPending));
+  if (actionPending) el('myControls').querySelectorAll('button, input, select').forEach((node) => { node.disabled = true; });
 
   el('trialSection').classList.toggle('hidden', !(s.phase === 'trial' || s.phase === 'finished'));
   el('resultSection').classList.toggle('hidden', s.phase !== 'finished');
@@ -380,6 +541,16 @@ function render() {
     logBox.appendChild(d);
   });
   logBox.scrollTop = logBox.scrollHeight;
+  document.querySelectorAll('#myControls button, #myControls input, #myControls select, .slot[role="button"], .card-hand [role="button"]').forEach((node) => {
+    if (!node.dataset.focusKey) node.dataset.focusKey = node.dataset.motionId || `${node.tagName}:${node.getAttribute('aria-label') || node.textContent}`;
+  });
+  if (focusKey) {
+    const target = Array.from(document.querySelectorAll('[data-focus-key]')).find((node) => node.dataset.focusKey === focusKey);
+    if (target) target.focus({ preventScroll: true });
+    else if (selectedCardId) document.querySelector('.player-panel.me .slot.selectable')?.focus({ preventScroll: true });
+    else if (focused?.classList.contains('slot')) document.querySelector('#myControls .selectable, #myControls button.primary')?.focus({ preventScroll: true });
+  }
+  animateUi(previous);
 }
 
 function renderRecordsBar(s) {
@@ -387,6 +558,7 @@ function renderRecordsBar(s) {
   const active = s.activeRecords || [];
   const show = s.phase !== 'lobby' && active.length > 0;
   bar.classList.toggle('hidden', !show);
+  el('recordsDetails').classList.toggle('hidden', !show);
   if (!show) return;
   bar.innerHTML = '';
   active.forEach((rec) => {
@@ -671,11 +843,15 @@ function orderedPlayersForBoard(s) {
 
 function renderPlayersBoard(s) {
   const board = el('playersBoard');
+  // Trial/result ticks also replace panels without going through render().
+  const controls = el('myControls');
+  if (board.contains(controls)) el('gameScreen').appendChild(controls);
   board.innerHTML = '';
   orderedPlayersForBoard(s).forEach((p) => {
     const isMe = p.id === s.myId;
     const panel = document.createElement('div');
     panel.className = 'player-panel' + (isMe ? ' me' : '');
+    panel.dataset.playerId = p.id;
 
     const head = document.createElement('div');
     head.className = 'player-head';
@@ -686,6 +862,7 @@ function renderPlayersBoard(s) {
       ${s.phase === 'sabotage' ? `<span class="tag">${p.pendingSabotageChoices && p.pendingSabotageChoices.length ? '対応待ち' : (p.sabotageSubmitted ? '提出済み' : (p.id === s.sabotageTurnPlayerId ? '🎯手番' : '待機中'))}</span>` : ''}
       ${s.phase === 'recovery' ? `<span class="tag">${p.recoveryTasks && p.recoveryTasks.length ? (p.id === s.recoveryTurnPlayerId ? '🎯復旧中' : '復旧待ち') : '完了'}</span>` : ''}`;
     panel.appendChild(head);
+    head.querySelector('.name').textContent = `${p.name}${isMe ? '（あなた）' : ''}${p.id === s.hostId ? ' 👑' : ''}`;
 
     if (p.customers && p.customers.length) {
       const custRow = document.createElement('div');
@@ -706,13 +883,18 @@ function renderPlayersBoard(s) {
       panel.appendChild(custRow);
     }
 
+    const course = document.createElement('div');
+    course.className = 'player-course';
+    panel.appendChild(course);
+
     // ジェットコースターマップ：スタートマスを左端に置き、その右側に
     // 8レールなら縦2マス×挑4マス、16レールなら縦2マス×挑8マスとなるように並べる
     const cols = Math.max(1, Math.ceil(p.rail.length / 2));
     const rail = document.createElement('div');
     rail.className = 'rail rail-map';
-    // 左端のスタート列 + マップ本体の列数
-    rail.style.gridTemplateColumns = `auto repeat(${cols}, 66px)`;
+    // 左端のスタート列 + マップ本体の列数。
+    // マス幅は CSS 変数 --slot-w で決める（スマホでは狭い値に上書きして画面内に収める）
+    rail.style.gridTemplateColumns = `auto repeat(${cols}, var(--slot-w, 66px))`;
 
     const startBox = document.createElement('div');
     startBox.className = 'slot start-slot';
@@ -761,10 +943,29 @@ function renderPlayersBoard(s) {
         const info = preview[slot];
         appendSlotInfoLines(div, info, '');
         appendCardLabelLines(div, pendingHere.card, { pending: true, brakeReduce: pendingHere.brakeReduce });
-        div.style.borderColor = '#ffd24a';
+        div.classList.add('pending-slot');
+        makeInteractive(div, `マス${slot + 1}：${cardLabel(pendingHere.card)}の配置を取り消す`, () => {
+          pendingPlacements = pendingPlacements.filter((pp) => pp.slot !== slot);
+          render();
+        });
       } else if (isMe && s.phase === 'placement' && !p.placedThisRound && selectedCardId && pendingPlacements.length < requiredPlacementCount(s)) {
         div.classList.add('selectable');
-        div.addEventListener('click', () => placeSelectedAt(slot));
+        const label = document.createElement('span');
+        label.className = 'slot-action';
+        label.textContent = '＋ ここに置く';
+        div.appendChild(label);
+        makeInteractive(div, `マス${slot + 1}に選択したカードを配置`, () => placeSelectedAt(slot));
+      }
+      if (card || pendingHere) div.dataset.motionId = `card:${(card || pendingHere.card).id}`;
+      div.dataset.focusKey = `slot:${p.id}:${slot}`;
+      const lastTrial = trialLines[trialLines.length - 1];
+      const resultRunning = s.phase === 'finished' && resultAnim && !resultAnim.done && s.trialResults[resultAnim.currentIndex]?.playerId === p.id && resultAnim.step === slot;
+      if (resultRunning || (s.phase === 'trial' && lastTrial && lastTrial.playerId === p.id && lastTrial.slot === slot)) {
+        div.classList.add('running-slot');
+        const train = document.createElement('span');
+        train.className = 'train-marker';
+        train.textContent = '🎢';
+        div.appendChild(train);
       }
       rail.appendChild(div);
     });
@@ -787,16 +988,31 @@ function renderPlayersBoard(s) {
       if (bonusBox) railRow.appendChild(bonusBox);
     }
 
-    panel.appendChild(railRow);
+    course.appendChild(railRow);
 
-    if (p.hand.length) {
+    if (isMe && s.phase === 'placement' && !p.placedThisRound) {
+      const note = document.createElement('p');
+      note.className = 'rail-preview-note';
+      const unsafe = preview.map((info, i) => info?.safety ? i + 1 : null).filter(Boolean);
+      note.textContent = unsafe.length ? `⚠ 仮の試走：マス${unsafe.join('・')}で安全装置が作動します。空きマスを飛ばした予測なので、前後の配置で変わります。` : '仮の試走：スタートは高度2・速度2。空きマスを飛ばした予測です。番号順に走行します。';
+      note.classList.toggle('preview-warning', unsafe.length > 0);
+      course.appendChild(note);
+    }
+
+    if (p.hand.length && !(isMe && s.phase === 'placement' && !p.placedThisRound)) {
+      const label = document.createElement('p');
+      label.className = 'hand-label';
+      label.textContent = `${isMe ? '集めた手札' : '公開手札'} · ${p.hand.length}枚${isMe ? '' : ' ／ 閲覧のみ'}`;
+      course.appendChild(label);
       const row = document.createElement('div');
       row.className = 'hand-row';
       p.hand.forEach((c) => row.appendChild(makeCardEl(c, false)));
-      panel.appendChild(row);
+      decorateHand(row);
+      course.appendChild(row);
     }
 
     board.appendChild(panel);
+    if (isMe) panel.appendChild(controls);
   });
 }
 
@@ -806,6 +1022,9 @@ function makeCardEl(c, selectable) {
   if (c.id === selectedCardId) d.className += ' chosen';
   d.title = cardTooltip(c);
   d.appendChild(buildCardVisual(c));
+  d.dataset.motionId = `card:${c.id}`;
+  d.tabIndex = 0;
+  d.setAttribute('aria-label', cardTooltip(c));
   return d;
 }
 
@@ -813,7 +1032,10 @@ function makeCardOptionBox(c, selectable, onClick) {
   const box = document.createElement('div');
   box.className = 'card-option card-v' + (selectable ? ' selectable' : '') + (c.id === selectedCardId ? ' chosen' : '');
   box.appendChild(buildCardVisual(c));
-  if (selectable && onClick) box.addEventListener('click', onClick);
+  box.dataset.motionId = `card:${c.id}`;
+  box.setAttribute('aria-pressed', String(c.id === selectedCardId));
+  if (selectable && onClick) makeInteractive(box, `${cardLabel(c)}を選ぶ。${cardEffectText(c)}`, () => { if (!actionPending) onClick(); });
+  else box.setAttribute('aria-disabled', 'true');
   return box;
 }
 
@@ -822,19 +1044,17 @@ function placeSelectedAt(slot) {
   const me = s.players.find((p) => p.id === s.myId);
   const options = allMyOptions(me);
   const card = options.find((c) => c.id === selectedCardId);
-  if (!card) return;
+  if (!card || actionPending || s.phase !== 'placement' || me.placedThisRound || me.rail[slot] || pendingPlacements.some((pp) => pp.slot === slot) || pendingPlacements.length >= requiredPlacementCount(s)) return;
 
   let brakeReduce;
   if (card.kind === 'part' && card.type === 'brake') {
-    const raw = window.prompt('ブレーキ：下げる速度の値を入力してください（0以上の整数。実際の速度より大きい場合は下げられる分だけ下がります）', '0');
-    if (raw === null) return; // キャンセルされたら配置しない
-    const n = parseInt(raw, 10);
-    brakeReduce = Number.isFinite(n) && n >= 0 ? n : 0;
+    brakeReduce = placementBrakeReduce;
   }
 
   pendingPlacements.push({ cardId: card.id, slot, card, brakeReduce });
   selectedCardId = null;
   render();
+  showFeedback(`${cardLabel(card)}をマス${slot + 1}に仮置きしました`);
 }
 
 function allMyOptions(me) {
@@ -849,7 +1069,7 @@ function renderMyControls(s) {
 
   if (s.phase === 'draft') {
     const title = document.createElement('h3');
-    title.textContent = '一般パーツをドラフト';
+    title.textContent = '届いたカードから1枚を手札へ';
     box.appendChild(title);
     if (me.hasPendingPick) {
       const p = document.createElement('div');
@@ -863,26 +1083,45 @@ function renderMyControls(s) {
       box.appendChild(p);
     } else {
       const info = document.createElement('div');
-      info.textContent = '1枚選んでください：';
+      info.className = 'hint';
+      info.textContent = 'カードを押して選択 → 効果を確認 → 「手札に加える」で決定。';
       box.appendChild(info);
       const row = document.createElement('div');
       row.className = 'card-option-grid';
       s.myDraftPacket.forEach((c) => {
         const e = makeCardOptionBox(c, true, () => {
-          socket.emit('draftPick', { cardId: c.id }, (res) => {
-            if (!res.ok) alert(res.error);
-          });
+          draftSelectedCardId = draftSelectedCardId === c.id ? null : c.id;
+          render();
         });
+        e.classList.toggle('chosen', c.id === draftSelectedCardId);
+        e.setAttribute('aria-pressed', String(c.id === draftSelectedCardId));
         row.appendChild(e);
       });
+      decorateHand(row);
       box.appendChild(row);
+      const selected = s.myDraftPacket.find((c) => c.id === draftSelectedCardId);
+      if (selected) {
+        const detail = document.createElement('p');
+        detail.className = 'selection-detail';
+        detail.textContent = `${cardLabel(selected)}：${cardEffectText(selected)}`;
+        box.appendChild(detail);
+        const confirm = document.createElement('button');
+        confirm.className = 'primary';
+        confirm.textContent = `${cardLabel(selected)}を手札に加える`;
+        confirm.addEventListener('click', () => submitAction('draftPick', { cardId: selected.id }, (res) => {
+          if (!res.ok) return showFeedback(res.error);
+          draftSelectedCardId = null;
+          showFeedback('選択を確定しました。全員が選ぶと残りのカードが回ります。');
+        }));
+        box.appendChild(confirm);
+      }
     }
     return;
   }
 
   if (s.phase === 'placement') {
     const title = document.createElement('h3');
-    title.textContent = `レールに${requiredPlacementCount(s)}枚配置`;
+    title.textContent = `あなたの手札 ／ 配置予定 ${pendingPlacements.length} / ${requiredPlacementCount(s)}枚`;
     box.appendChild(title);
 
     if (me.placedThisRound) {
@@ -901,7 +1140,7 @@ function renderMyControls(s) {
       // 補助のパーツ交換などで、すでにラウンド数×2枚に達している場合
       info.textContent = `すでに設置枚数（${s.requiredPlacedTotal}枚）に達しているため、今回は配置する必要がありません。「配置を確定」を押してください。`;
     } else {
-      info.textContent = `カードを選んでから、上のレールで空きマスをクリックして配置してください（このラウンド終了時に合計${s.requiredPlacedTotal}枚になります）。`;
+      info.textContent = selectedCardId ? '選択中のカードを、自分のレールの光るマスに置いてください。もう一度カードを押すと選択を解除できます。' : `手札を選ぶ → 光るマスに置く → ${needCount}枚置いたら確定。カードは空きマスのどこにでも置けます。`;
     }
     box.appendChild(info);
 
@@ -911,11 +1150,37 @@ function renderMyControls(s) {
     options.filter((c) => !usedIds.has(c.id)).forEach((c) => {
       const e = makeCardOptionBox(c, canPick, canPick ? () => {
         selectedCardId = c.id === selectedCardId ? null : c.id;
+        placementBrakeReduce = 0;
         render();
       } : null);
       row.appendChild(e);
     });
+    decorateHand(row);
     box.appendChild(row);
+
+    const selected = options.find((c) => c.id === selectedCardId);
+    if (selected) {
+      const detail = document.createElement('p');
+      detail.className = 'selection-detail';
+      detail.textContent = `${cardLabel(selected)}：${cardEffectText(selected)}`;
+      box.appendChild(detail);
+      if (selected.kind === 'part' && selected.type === 'brake') {
+        const label = document.createElement('label');
+        label.className = 'brake-setting';
+        label.textContent = '下げる速度を指定してから、マスを選択：';
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.step = '1';
+        input.value = placementBrakeReduce;
+        input.setAttribute('aria-label', 'ブレーキで下げる速度');
+        input.addEventListener('input', () => {
+          placementBrakeReduce = Number.isFinite(input.valueAsNumber) ? Math.max(0, Math.floor(input.valueAsNumber)) : 0;
+        });
+        label.appendChild(input);
+        box.appendChild(label);
+      }
+    }
 
     if (pendingPlacements.length) {
       const list = document.createElement('div');
@@ -923,7 +1188,7 @@ function renderMyControls(s) {
       list.innerHTML = '配置予定：' + pendingPlacements.map((pp) => `${partIcon(pp.card, 'part-icon-img small')}${cardLabelWithBrake(pp.card, pp.brakeReduce)}→マス${pp.slot + 1}`).join('、');
       box.appendChild(list);
       const undoBtn = document.createElement('button');
-      undoBtn.textContent = '配置予定を取り消す';
+      undoBtn.textContent = '↶ 最後の配置を取り消す';
       undoBtn.addEventListener('click', () => {
         pendingPlacements.pop();
         render();
@@ -942,12 +1207,12 @@ function renderMyControls(s) {
     if (pendingPlacements.length === needCount) {
       const confirmBtn = document.createElement('button');
       confirmBtn.className = 'primary';
-      confirmBtn.textContent = '配置を確定';
+      confirmBtn.textContent = `${needCount}枚の配置を確定`;
       confirmBtn.addEventListener('click', () => {
-        socket.emit('submitPlacement', {
+        submitAction('submitPlacement', {
           placements: pendingPlacements.map((pp) => ({ cardId: pp.cardId, slot: pp.slot, brakeReduce: pp.brakeReduce })),
         }, (res) => {
-          if (!res.ok) return alert(res.error);
+          if (!res.ok) return showFeedback(res.error);
           pendingPlacements = [];
           selectedCardId = null;
         });
@@ -969,7 +1234,7 @@ function renderMyControls(s) {
 }
 
 function makeLabeledSelect(labelText, options, state, key, numeric) {
-  if (state[key] === undefined && options.length) state[key] = options[0].value;
+  if (!options.some((option) => String(option.value) === String(state[key]))) state[key] = options.length ? options[0].value : undefined;
   const wrap = document.createElement('div');
   wrap.className = 'sabotage-field';
   const label = document.createElement('div');
@@ -977,6 +1242,8 @@ function makeLabeledSelect(labelText, options, state, key, numeric) {
   label.textContent = labelText;
   wrap.appendChild(label);
   const select = document.createElement('select');
+  select.setAttribute('aria-label', labelText);
+  select.disabled = !options.length;
   options.forEach((o) => {
     const opt = document.createElement('option');
     opt.value = o.value;
@@ -1010,7 +1277,7 @@ function getValidSabotageTargets(card, me, allPlayers) {
       if (!me.customers || me.customers.length === 0) return [];
       return others.filter((p) => p.customers && p.customers.length > 0);
     case 'custBanType':
-      return allPlayers;
+      return allPlayers.filter((p) => CUSTOMER_TABLE_DATA.some((c) => !(p.bannedCustomerTypes || []).includes(c.typeKey)));
     case 'partDestroy':
       return allPlayers.filter((p) => p.rail.some((c) => c));
     case 'partSwap':
@@ -1060,8 +1327,8 @@ function renderSabotagePhase(s, me, box) {
       const btn = document.createElement('button');
       btn.textContent = 'この客層を入れ替える';
       btn.addEventListener('click', () => {
-        socket.emit('resolveSabotageChoice', { choiceId: choice.id, customerIndex: state.idx }, (res) => {
-          if (!res.ok) alert(res.error);
+        submitAction('resolveSabotageChoice', { choiceId: choice.id, customerIndex: state.idx }, (res) => {
+          if (!res.ok) showFeedback(res.error);
         });
       });
       wrap.appendChild(btn);
@@ -1074,7 +1341,7 @@ function renderSabotagePhase(s, me, box) {
         const btn = document.createElement('button');
         btn.textContent = 'このパーツを破壊させる';
         btn.addEventListener('click', () => {
-          socket.emit('resolveSabotageChoice', { choiceId: choice.id, slot: state.idx }, (res) => {
+          submitAction('resolveSabotageChoice', { choiceId: choice.id, slot: state.idx }, (res) => {
             if (!res.ok) alert(res.error);
           });
         });
@@ -1115,7 +1382,8 @@ function renderSabotagePhase(s, me, box) {
     const isSelected = sabotageSelectedCardId === card.id;
 
     const cardBox = document.createElement('div');
-    cardBox.className = 'sabotage-card' + (isSelected ? ' active' : '') + (usable ? '' : ' disabled');
+    cardBox.className = 'sabotage-card' + (isSelected ? ' active' : '') + (usable ? ' usable' : ' disabled');
+    cardBox.dataset.motionId = `card:${card.id}`;
 
     const head = document.createElement('div');
     head.className = 'sabotage-card-head';
@@ -1136,6 +1404,7 @@ function renderSabotagePhase(s, me, box) {
     const selectBtn = document.createElement('button');
     selectBtn.textContent = isSelected ? '選択中（もう一度押すと解除）' : 'このカードを使う';
     selectBtn.className = isSelected ? 'primary' : '';
+    selectBtn.setAttribute('aria-pressed', String(isSelected));
     selectBtn.addEventListener('click', () => {
       sabotageSelectedCardId = isSelected ? null : card.id;
       sabotagePlayParams = {};
@@ -1173,7 +1442,7 @@ function renderSabotagePhase(s, me, box) {
   box.appendChild(handRow);
 
   const confirmBtn = document.createElement('button');
-  confirmBtn.className = 'primary';
+  confirmBtn.className = sabotageSelectedCardId ? 'primary' : 'secondary';
   confirmBtn.textContent = sabotageSelectedCardId ? '選んだカードを使用して確定' : '何も使わずに確定';
   confirmBtn.addEventListener('click', () => {
     const plays = [];
@@ -1199,7 +1468,7 @@ function renderSabotagePhase(s, me, box) {
       }
       plays.push(play);
     }
-    socket.emit('submitSabotage', { plays }, (res) => {
+    submitAction('submitSabotage', { plays }, (res) => {
       if (!res.ok) return alert(res.error);
       sabotageSelectedCardId = null;
       sabotagePlayParams = {};
@@ -1269,8 +1538,10 @@ function renderRecoveryPhase(s, me, box) {
         render();
       });
       if (c.id === state.cardId) e.classList.add('chosen');
+      e.setAttribute('aria-pressed', String(c.id === state.cardId));
       optionsRow.appendChild(e);
     });
+    decorateHand(optionsRow);
     wrap.appendChild(optionsRow);
 
     if (state.cardId) {
@@ -1313,7 +1584,8 @@ function renderRecoveryPhase(s, me, box) {
         input.min = '0';
         input.value = state.brakeReduce !== undefined ? state.brakeReduce : 0;
         input.style.width = '60px';
-        input.addEventListener('change', () => { state.brakeReduce = parseInt(input.value, 10) || 0; });
+        input.setAttribute('aria-label', '復旧するブレーキで下げる速度');
+        input.addEventListener('input', () => { state.brakeReduce = Math.max(0, parseInt(input.value, 10) || 0); });
         brakeWrap.appendChild(input);
         wrap.appendChild(brakeWrap);
       }
@@ -1321,9 +1593,10 @@ function renderRecoveryPhase(s, me, box) {
       const confirmBtn = document.createElement('button');
       confirmBtn.className = 'primary';
       confirmBtn.textContent = 'このパーツを設置する';
+      confirmBtn.disabled = task.type === 'swapped' && !state.position;
       confirmBtn.addEventListener('click', () => {
         if (task.type === 'swapped' && !state.position) { alert('設置する位置を選んでください'); return; }
-        socket.emit('resolveRecovery', {
+        submitAction('resolveRecovery', {
           taskId: task.id,
           cardId: state.cardId,
           position: state.position,
@@ -1341,7 +1614,7 @@ function renderRecoveryPhase(s, me, box) {
       const skipBtn = document.createElement('button');
       skipBtn.textContent = '設置しない（見送る）';
       skipBtn.addEventListener('click', () => {
-        socket.emit('resolveRecovery', { taskId: task.id }, (res) => {
+        submitAction('resolveRecovery', { taskId: task.id }, (res) => {
           if (!res.ok) return alert(res.error);
           delete recoveryChoiceState[task.id];
         });
@@ -1430,6 +1703,7 @@ function renderResultsPending(s) {
 // 途中でrender()を再帰的に呼ぶと、他の状態更新と絡んで表示が固まる原因になるため、
 // アニメーション専用の更新経路として完全に切り離してある。
 function renderResultTick(s) {
+  el('skipResultBtn').classList.toggle('hidden', !resultAnim || resultAnim.done);
   renderScoreBar(s);
   renderPlayersBoard(s);
   if (resultAnim.done) renderResults(s);
@@ -1437,22 +1711,33 @@ function renderResultTick(s) {
 }
 
 async function runResultAnimation(s) {
+  const animation = resultAnim;
+  if (reducedMotion()) {
+    animation.done = true;
+    animation.totals = Object.fromEntries(s.trialResults.map((r) => [r.playerId, r.total]));
+    renderResultTick(s);
+    return;
+  }
   try {
     // 上（1人目）のプレイヤーから順に、1マス目から順に計算結果を反映していく
     for (let idx = 0; idx < s.trialResults.length; idx++) {
+      if (resultAnim !== animation || animation.done) return;
       const r = s.trialResults[idx];
       resultAnim.currentIndex = idx;
       const railLen = r.history.length;
       for (let step = 0; step < railLen; step++) {
+        if (resultAnim !== animation || animation.done) return;
         resultAnim.step = step;
         const h = r.history[step];
         if (h) resultAnim.totals[r.playerId] += h.totalDelta;
         renderResultTick(s);
         await wait(1000);
       }
+      if (resultAnim !== animation || animation.done) return;
       resultAnim.step = railLen;
       renderResultTick(s);
       await wait(800);
+      if (resultAnim !== animation || animation.done) return;
       resultAnim.totals[r.playerId] += r.skillTotal;
       renderResultTick(s);
       await wait(600);
@@ -1461,10 +1746,12 @@ async function runResultAnimation(s) {
     console.error('結果発表アニメーション中にエラーが発生しました。最終結果を直接表示します。', e);
   } finally {
     // 途中で何が起きても、必ず最終結果が正しく表示された状態で終わらせる
-    resultAnim.currentIndex = s.trialResults.length - 1;
-    resultAnim.totals = Object.fromEntries(s.trialResults.map((r) => [r.playerId, r.total]));
-    resultAnim.done = true;
-    renderResultTick(s);
+    if (resultAnim === animation) {
+      resultAnim.currentIndex = s.trialResults.length - 1;
+      resultAnim.totals = Object.fromEntries(s.trialResults.map((r) => [r.playerId, r.total]));
+      resultAnim.done = true;
+      renderResultTick(s);
+    }
   }
 }
 

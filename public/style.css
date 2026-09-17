@@ -1,4 +1,8 @@
 :root {
+  /* マス幅。PCはこの値のまま。スマホ用のメディアクエリでのみ上書きする */
+  --slot-w: 66px;
+  --slot-start-w: 58px;
+  --slot-h: 90px;
   --bg: #0f1720;
   --panel: #1a2532;
   --panel2: #223143;
@@ -258,7 +262,7 @@ section h2, section h3 { margin: 0 0 8px; }
   gap: 4px;
 }
 /* スタートマスは左端で縦2行分をぶち抜きする */
-.rail.rail-map .start-slot { width: 58px; min-height: 0; }
+.rail.rail-map .start-slot { width: var(--slot-start-w); min-height: 0; }
 .start-slot { border-style: dashed; border-color: var(--accent2); background: #0e1e2c; }
 .start-slot .slot-info { color: var(--accent2); }
 .rail-total {
@@ -269,7 +273,7 @@ section h2, section h3 { margin: 0 0 8px; }
 .rail-total-label { font-size: 10px; color: var(--muted); }
 .rail-total-val { font-size: 20px; font-weight: 700; color: var(--accent); }
 .slot {
-  width: 66px; min-height: 90px; border: 1px dashed #3a4c5f; border-radius: 8px;
+  width: var(--slot-w); min-height: var(--slot-h); border: 1px dashed #3a4c5f; border-radius: 8px;
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
   font-size: 11px; text-align: center;
   background: #101a24; position: relative; padding: 14px 3px 4px;
@@ -406,3 +410,250 @@ section h2, section h3 { margin: 0 0 8px; }
   font-weight: 700; color: var(--text);
 }
 .rail-bonus-sum .rb-sum-val { color: var(--accent); font-size: 14px; }
+
+/* ==========================================================================
+   スマホ（縦画面）専用レイアウト
+   PCの見た目は一切変えず、画面が狭いときだけここで上書きする。
+   ========================================================================== */
+@media (max-width: 700px) {
+  /* --- 全体：余白を詰めて横幅いっぱいに使う --- */
+  #gameScreen { padding: 8px; max-width: 100%; }
+  section { margin-bottom: 10px; }
+  body { font-size: 13px; }
+
+  /* 横スクロールを起こさない（レール等は各自のコンテナ内でスクロールさせる） */
+  html, body { overflow-x: hidden; }
+
+  /* --- タイトル（ロビー）画面：固定360pxだと小型端末で見切れる --- */
+  .lobby-box { width: auto; max-width: 100%; padding: 22px 18px; margin: 0 10px; }
+  #lobbyScreen { min-height: 100dvh; padding: 12px 0; }
+
+  /* --- 上部バー：縦積みにして情報を見切れさせない --- */
+  #topbar {
+    flex-direction: column; align-items: flex-start; gap: 6px;
+    padding: 8px 10px; font-size: 12px;
+  }
+  #topbar > * { width: 100%; }
+  #backToTitleBtn { width: auto; align-self: flex-end; padding: 6px 12px; font-size: 12px; }
+
+  /* --- マス：スマホ幅に収まるよう小さくする（--slot-w はJSの列幅にも効く） --- */
+  :root {
+    --slot-w: 40px;
+    --slot-start-w: 38px;
+    --slot-h: 76px;
+  }
+  .slot { padding: 12px 1px 3px; font-size: 9px; gap: 0; }
+  .slot .idx { font-size: 8px; top: 0; left: 2px; }
+  .slot-info { font-size: 8px; line-height: 1.15; }
+  .slot-label { font-size: 8px; line-height: 1.15; }
+  .slot-score { font-size: 9px; }
+  .part-icon-img.slot-icon-img { width: 11px; height: 11px; }
+
+  /* レール16マス設定だと40px×8列でも溢れるので、その時だけ内部で横スクロール */
+  .rail-row { gap: 6px; align-items: stretch; }
+  .rail-row > .rail { overflow-x: auto; max-width: 100%; padding-bottom: 2px; }
+
+  /* --- プレイヤーパネル：1列縦並びのまま、余白だけ詰める --- */
+  #playersBoard { gap: 8px; }
+  .player-panel { padding: 8px 10px; }
+  .player-head { font-size: 12px; gap: 4px; }
+  .tag { font-size: 10px; padding: 2px 6px; }
+  .player-customer-chip { font-size: 10px; }
+
+  /* --- 客層カード：横スクロールの1行にして縦を節約 --- */
+  #customerBar {
+    flex-wrap: nowrap; overflow-x: auto; gap: 8px; padding-bottom: 4px;
+  }
+  .customer-bar-title { flex-basis: auto; width: 100%; }
+  .customer-card { min-width: 140px; flex: 0 0 auto; padding: 8px 10px; font-size: 12px; }
+  .customer-icon .customer-icon-img { width: 40px; height: 40px; }
+  .customer-card .skill { font-size: 11px; }
+
+  /* --- カード選択（ドラフト・配置）：2列に並べて親指で押しやすく --- */
+  .card-option-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .card-option { padding: 6px; }
+  .card-v { width: auto; }
+  .card-v-img { width: 48px; height: 48px; }
+  .card-v-compact .card-v-img { width: 36px; height: 36px; }
+
+  /* --- 補助カード：画面幅いっぱいの1枚ずつに --- */
+  .sabotage-hand { flex-direction: column; gap: 8px; }
+  .sabotage-card { width: 100%; }
+  .sabotage-field select { font-size: 14px; padding: 8px; }
+
+  /* --- ボーナス満足度：マップの右ではなく下に回す --- */
+  .rail-bonus { max-width: 100%; min-width: 0; width: 100%; }
+  .rail-total { min-width: 0; padding: 6px 10px; }
+  .rail-total-val { font-size: 16px; }
+
+  /* --- 実行順バー・記録バー --- */
+  #sabotageOrderBar { padding: 6px 10px; }
+  .order-bar-title { font-size: 11px; }
+  .order-chip { font-size: 11px; padding: 2px 8px; }
+  .record-chip { font-size: 12px; }
+
+  /* --- ポップアップ：画面幅に合わせる --- */
+  #sabotageToast { padding: 14px 16px; min-width: 0; width: calc(100vw - 32px); }
+  #sabotageToast .toast-line { font-size: 14px; }
+
+  /* --- ルール説明・凡例：1列に --- */
+  .legend-grid { grid-template-columns: 1fr; }
+  table { font-size: 11px; }
+  th, td { padding: 5px 6px; }
+
+  /* --- ボタン・入力：タップしやすい大きさを確保 --- */
+  button { padding: 10px 14px; font-size: 14px; }
+  input, select { font-size: 16px; } /* iOSで自動ズームされないよう16px以上 */
+
+  /* --- ログ：高さを抑える --- */
+  #logBox { max-height: 110px; font-size: 11px; }
+}
+
+/* さらに狭い端末（iPhone SE 等）向けの微調整 */
+@media (max-width: 380px) {
+  :root { --slot-w: 36px; --slot-start-w: 34px; --slot-h: 72px; }
+  .card-option-grid { grid-template-columns: 1fr; }
+}
+
+/* Guided card table: one work area, visible choices, reversible placement. */
+:root { --muted: #aebdca; --accent2: #81ddcf; --slot-w: 76px; --slot-h: 102px; }
+body { background: radial-gradient(ellipse at 40% 0%, #1b3b40 0, #111e29 55%, #0c151e 100%); }
+button, [role="button"], summary { touch-action: manipulation; }
+button { transition: background .18s, box-shadow .18s; }
+button:disabled, [aria-disabled="true"] { cursor: default; opacity: .48; filter: saturate(.45); }
+button:disabled:hover { filter: saturate(.45); }
+:focus-visible { outline: 3px solid #ffcf77; outline-offset: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+#gameScreen { max-width: 1180px; padding: 20px; }
+#topbar { background: transparent; padding: 0 0 14px; border-bottom: 1px solid #35505a; border-radius: 0; }
+#roomInfo { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+#roomInfo button { margin: 0; font-size: 12px; }
+#phaseInfo { font-size: 13px; }
+#turnGuide { background: #183d40; border: 1px solid #528e84; border-radius: 16px; padding: 16px 22px; }
+#turnGuide.waiting { background: #1b2b38; border-color: #3b5161; }
+#phaseSteps { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 16px; }
+.phase-step { display: inline-flex; gap: 6px; align-items: center; font-size: 12px; color: #a4b6c2; }
+.phase-step b { border: 1px solid #587179; border-radius: 50%; width: 22px; height: 22px; display: grid; place-items: center; font-size: 11px; }
+.phase-step.current { color: #e1fff4; font-weight: 700; }
+.phase-step.current b { background: #a9ecd2; color: #12342e; border-color: #a9ecd2; }
+.guide-content { display: flex; align-items: start; gap: 16px; }
+#guideBadge { background: #b3efce; color: #173b2c; border-radius: 6px; padding: 6px 9px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.waiting #guideBadge { background: #334958; color: #d6e4ee; }
+#guideTitle { font-size: 20px; margin: 0 0 6px; }
+#guideHint { margin: 0; font-size: 12px; line-height: 1.7; color: #c0d6d5; }
+#helpCenter { margin: 0 0 16px; font-size: 12px; color: var(--muted); }
+#helpCenter > summary { cursor: pointer; padding: 8px 0; }
+#helpCenter[open] { padding: 12px; background: #14212d; border-radius: 12px; }
+.quick-rule { line-height: 1.8; }
+#customerBar { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.customer-bar-title { grid-column: 1 / -1; }
+#recordsDetails { margin: 0 0 14px; color: var(--muted); font-size: 12px; }
+#recordsDetails summary { cursor: pointer; padding: 6px 0; }
+#recordsBar { margin-top: 8px; }
+.customer-card { padding: 8px 12px; flex: 1 1 155px; min-width: 0; max-width: 260px; font-size: 12px; background: #1a303a; }
+.customer-icon { float: left; margin: 0 10px 4px 0; }
+.customer-icon .customer-icon-img { width: 40px; height: 40px; }
+.customer-card .skill { clear: both; font-size: 11px; }
+.player-panel { padding: 16px 20px; border-radius: 16px; overflow: visible; min-width: 0; background: #192936; }
+.player-panel.me { border: 1px solid #6aafa2; background: linear-gradient(145deg, #203d41, #192d36); box-shadow: 0 10px 30px #0002; }
+.player-head { justify-content: flex-start; gap: 12px; }
+.player-head .name { flex: 1; font-size: 15px; overflow-wrap: anywhere; }
+.player-head .tag { padding: 4px 10px; }
+.player-panel.me .tag { background: #33554f; color: #d6f9e9; }
+.rail-row { overflow-x: auto; padding: 5px 3px 10px; flex-wrap: nowrap; align-items: stretch; }
+.rail.rail-map { gap: 6px; flex-shrink: 0; }
+.slot { background: #11242d; border-color: #415965; border-radius: 10px; }
+.slot .idx { top: 5px; left: 6px; font-size: 10px; }
+.slot.filled { background: #253c47; }
+.slot.selectable { border: 2px dashed #9bf0ca; background: #2a534b; color: #caffdf; cursor: pointer; box-shadow: inset 0 0 16px #7cffb710; }
+.slot.selectable:hover, .slot.selectable:focus-visible { background: #376958; box-shadow: 0 0 14px #8ee7bc40; }
+.slot-action { font-size: 10px; line-height: 1.6; }
+.pending-slot { border: 2px solid #f6cc7e; background: #454532; cursor: pointer; }
+.pending-slot::after { content: '↶ 取消'; font-size: 9px; color: #ffe4a9; }
+.slot-info { line-height: 1.4; }
+.rail-preview-note { font-size: 11px; color: #b5c9cd; line-height: 1.7; margin: 0 0 10px; }
+.rail-preview-note.preview-warning { color: #ffcf94; }
+#myControls { margin: 12px 0 0; border-top: 1px solid #456365; border-radius: 0; background: transparent; padding: 16px 0 0; min-width: 0; }
+#myControls h3 { font-size: 14px; margin: 0 0 8px; }
+#myControls > button.primary { width: auto; min-width: 240px; display: block; margin: 12px auto 0; padding: 13px 24px; background: #b8edcf; color: #16362b; box-shadow: 0 3px 0 #6a9c81; }
+#myControls.submitting { opacity: .65; pointer-events: none; }
+.hand-label { font-size: 11px; margin: 14px 0 0; color: var(--muted); }
+.card-hand { display: flex; flex-wrap: nowrap; align-items: flex-start; justify-content: safe center; gap: 0; padding: 28px 20px 20px; margin: 0; overflow-x: auto; min-width: 0; }
+.card-hand > .card-v { position: relative; flex: 0 0 174px; width: 174px; min-height: 252px; margin: 0; padding: 12px; border: 2px solid #c9d2cc; border-radius: 13px; background: #f1f0e6; color: #1f3336; box-shadow: 0 5px 12px #0004; transform: translateY(var(--fan-rise, 0px)) rotate(var(--fan-angle, 0deg)); transform-origin: center bottom; transition: transform .2s, box-shadow .2s, border-color .2s; text-align: left; }
+.card-hand > .card-v + .card-v { margin-left: -12px; }
+.card-hand .card-v-name { font-size: 14px; color: #173938; }
+.card-hand .card-v-stats { gap: 3px; }
+.card-hand .card-v-stat { font-size: 10px; color: #315b59; background: #dce7de; white-space: normal; }
+.card-hand .card-v-mid { padding: 3px 0; }
+.card-hand .card-v-img { width: 76px; height: 76px; background: #e1e7dc; border-radius: 9px; }
+.card-hand .card-v-bottom { font-size: 11px; line-height: 1.55; color: #435b59; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.card-hand > .selectable { border-color: #9edabf; cursor: pointer; }
+.card-hand > .selectable::after { content: '選択できます'; margin-top: auto; padding-top: 6px; font-size: 10px; font-weight: 700; color: #287455; }
+.card-hand > .selectable:hover, .card-hand > .card-v:focus-visible { z-index: 3; transform: translateY(-9px) rotate(0); filter: none; box-shadow: 0 10px 24px #0005; }
+.card-hand > .chosen { z-index: 4; transform: translateY(-13px) rotate(0); border-color: #edaf4f; outline: 2px solid #f1cd82; box-shadow: 0 10px 24px #0005; }
+.card-hand > .chosen::after { content: '✓ 選択中'; color: #7c4c0c; }
+.card-flight { position: fixed; z-index: 120; margin: 0; padding: 0; overflow: visible; pointer-events: none; transform-origin: top left; }
+.card-flight > .card-v { flex-basis: 100%; width: 100%; height: 100%; min-height: 0; transform: none; }
+.player-course { min-width: 0; }
+.hand-row.card-hand { justify-content: flex-start; padding: 16px 8px; }
+.hand-row.card-hand > .card-v { flex-basis: 122px; width: 122px; min-height: 177px; padding: 8px; }
+.hand-row.card-hand > .card-v + .card-v { margin-left: -28px; }
+.hand-row .card-v-name { font-size: 11px; }
+.hand-row .card-v-img { width: 44px; height: 44px; }
+.hand-row .card-v-bottom { font-size: 10px; -webkit-line-clamp: 2; }
+.hand-row .card-v-stat { font-size: 9px; padding: 1px 3px; }
+.hand-row .card-v:hover, .hand-row .card-v:focus-visible { z-index: 5; transform: translateY(-5px) rotate(0); }
+.hand-row .card-v:focus .card-v-bottom, .hand-row .card-v:hover .card-v-bottom { display: block; }
+.selection-detail { background: #112830; border-left: 3px solid #e6c686; border-radius: 6px; padding: 10px 14px; margin: 8px 0; font-size: 12px; line-height: 1.7; color: #e2eadd; }
+.brake-setting { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; padding: 8px 0; }
+.brake-setting input, .recovery-task-box input { width: 76px; background: #102631; border: 1px solid #91cbb5; border-radius: 6px; color: white; padding: 10px; font-size: 16px; }
+.sabotage-hand { align-items: flex-start; justify-content: center; }
+.sabotage-card { min-height: 175px; border-radius: 13px; background: #253b47; }
+.sabotage-card.usable { border-color: #88bea5; }
+.sabotage-card.active { background: #364637; border-color: #f1cd82; box-shadow: 0 5px 18px #0003; }
+.sabotage-card-desc { font-size: 12px; line-height: 1.65; }
+.sabotage-card.usable > button { border: 1px solid #9edabf; }
+.sabotage-field select { min-height: 40px; padding: 8px; }
+.sabotage-field button { margin-right: 6px; }
+.recovery-task-box { min-width: 0; }
+#actionFeedback { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); max-width: calc(100vw - 32px); width: max-content; padding: 12px 20px; border: 1px solid #8bbba4; border-radius: 12px; background: #14392f; color: #e2ffeb; box-shadow: 0 6px 24px #0006; z-index: 110; font-size: 13px; pointer-events: none; }
+.running-slot { border: 2px solid #ffce78; box-shadow: 0 0 20px #ffc36244; }
+.train-marker { position: absolute; top: -14px; right: 0; font-size: 24px; animation: trainArrive .35s ease-out; }
+.trial-line:last-child { animation: lineReveal .3s ease-out; }
+#trialLog { max-height: 280px; overflow-y: auto; }
+@keyframes trainArrive { from { transform: translateX(-25px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes lineReveal { from { opacity: 0; } to { opacity: 1; } }
+@media (min-width: 1050px) {
+  .player-panel.me { display: grid; grid-template-columns: minmax(0, 45fr) minmax(0, 55fr); column-gap: 18px; align-items: start; }
+  .player-panel.me > .player-head, .player-panel.me > .player-customers { grid-column: 1 / -1; }
+  .player-panel.me > .player-course { grid-column: 1; grid-row: 3; }
+  .player-panel.me:has(> #myControls.hidden) > .player-course { grid-column: 1 / -1; }
+  .player-panel.me > #myControls:not(.hidden) { grid-column: 2; grid-row: 3; border-top: 0; border-left: 1px solid #456365; margin: 8px 0 0; padding: 0 0 0 18px; }
+  .player-panel.me .card-option-grid.card-hand { padding-left: 6px; padding-right: 6px; }
+}
+@media (max-width: 700px) {
+  :root { --slot-w: 58px; --slot-start-w: 42px; --slot-h: 100px; }
+  #gameScreen { padding: 10px; }
+  #turnGuide { padding: 12px; }
+  #phaseSteps { gap: 8px 12px; margin-bottom: 12px; }
+  .phase-step { font-size: 10px; gap: 4px; }
+  .phase-step b { width: 18px; height: 18px; }
+  .guide-content { gap: 8px; flex-direction: column; }
+  #guideTitle { font-size: 17px; }
+  .player-panel { padding: 12px; }
+  .card-hand { justify-content: flex-start; padding: 25px 8px 18px; }
+  .card-hand > .card-v { flex-basis: 145px; width: 145px; min-height: 249px; padding: 9px; transform: rotate(0); }
+  .card-hand > .card-v + .card-v { margin-left: 8px; }
+  .card-hand > .chosen { transform: translateY(-9px); }
+  .card-hand .card-v-name { font-size: 12px; }
+  .hand-row.card-hand > .card-v + .card-v { margin-left: -22px; }
+  #myControls > button.primary { width: 100%; min-width: 0; }
+  #guideHint { font-size: 11px; }
+  .customer-card { flex-basis: 135px; }
+  .rail-row { -webkit-overflow-scrolling: touch; }
+  .slot-info, .slot-label { font-size: 10px; line-height: 1.3; }
+  #actionFeedback { bottom: 12px; font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}

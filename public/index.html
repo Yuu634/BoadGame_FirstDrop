@@ -44,6 +44,16 @@
 
     <section id="scoreBar" class="hidden"></section>
 
+    <section id="turnGuide" class="hidden" aria-label="次の操作">
+      <nav id="phaseSteps" aria-label="ゲームの流れ"></nav>
+      <div class="guide-content"><span id="guideBadge"></span><div><h2 id="guideTitle"></h2><p id="guideHint"></p></div></div>
+      <p id="guideStatus" role="status" aria-live="polite" class="sr-only"></p>
+    </section>
+
+    <details id="helpCenter">
+      <summary>遊び方・カードの効果を確認</summary>
+      <p class="quick-rule">お客さんの好みに合うコースターを作り、満足度の合計を競います。カードを集め、レールに配置し、最後に試運転。スリルが客層の耐性と一致すると高得点です。</p>
+
     <details id="gameRules">
       <summary>📜 ゲームルール説明（クリックで開閉）</summary>
       <div class="rules-body">
@@ -112,6 +122,8 @@
       </table>
     </details>
 
+    </details>
+
     <section id="lobbyWait" class="hidden">
       <h2>参加者待ち（2〜4人）</h2>
       <ul id="playerListLobby"></ul>
@@ -153,7 +165,10 @@
       <p class="hint">招待リンクを共有して、あと1〜3人を集めてください。</p>
     </section>
 
-    <section id="recordsBar" class="hidden"></section>
+    <details id="recordsDetails" class="hidden">
+      <summary>🏅 今回の記録ボーナスを確認</summary>
+      <section id="recordsBar" class="hidden"></section>
+    </details>
 
     <!-- イベントフェイズの実行順（レール配置位置の合計値が小さい人から）を見やすい位置に明記する -->
     <section id="sabotageOrderBar" class="hidden"></section>
@@ -163,6 +178,7 @@
     <section id="playersBoard"></section>
 
     <section id="myControls"></section>
+    <div id="actionFeedback" class="hidden" role="status" aria-live="polite"></div>
 
     <section id="trialSection" class="hidden">
       <h2>試運転フェイズ</h2>
@@ -173,6 +189,7 @@
       <h2>🏆 結果</h2>
       <div id="resultCalc"></div>
       <div id="resultBoard"></div>
+      <button id="skipResultBtn">アニメーションを省略して結果を見る</button>
       <button id="playAgainBtn" class="primary hidden">▶ 次のゲームへ</button>
       <p id="playAgainHint" class="hint hidden">ホストが次のゲームを開始するのを待っています…</p>
     </section>
